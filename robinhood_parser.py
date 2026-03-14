@@ -207,6 +207,40 @@ def render_dashboard_view(df_subset, category_name):
     else:
         col_b3.metric("🎯 Most Reliable Ticker", "Need more data", "Min 3 trades required", delta_color="off")
 
+    # --- NEW: ACTIONABLE RECOMMENDATIONS WITH LINKS ---
+    st.markdown("### 🛠️ Actionable Recommendations & Learning")
+    
+    recommendations = []
+    
+    # Risk/Reward Recommendation
+    if risk_reward > 0 and risk_reward < 1.0:
+        recommendations.append("🚨 **Risk/Reward Warning:** Your average loss is larger than your average win. You are forced to maintain a very high win rate just to break even. \n\n* **Action:** Consider setting tighter stop-losses to cut losers faster. \n* **Learn:** [Investopedia Guide to Risk/Reward Ratio](https://www.investopedia.com/terms/r/riskrewardratio.asp)")
+    elif risk_reward >= 1.5:
+        recommendations.append("✅ **Excellent Risk/Reward:** Your winners are significantly outperforming your losers. You are letting your winners run successfully! \n\n* **Action:** Consider using trailing stop-losses to protect these larger gains. \n* **Learn:** [How to Set a Trailing Stop-Loss](https://www.investopedia.com/articles/trading/08/trailing-stop-loss.asp)")
+        
+    # Holding Time Recommendation
+    if avg_days_loss > avg_days_win and avg_days_win > 0:
+        recommendations.append("📉 **Bag Holding Alert:** You hold onto losing trades longer than winning trades. This ties up your capital in bad setups. \n\n* **Action:** Try implementing a strict 'time-stop' (e.g., if a trade doesn't move in your favor after 3 days, cut it). \n* **Learn:** [Understanding Time Stops in Trading](https://www.investopedia.com/articles/active-trading/091813/which-stop-loss-strategy-right-you.asp)")
+    elif avg_days_win > avg_days_loss and avg_days_loss > 0:
+        recommendations.append("📈 **Great Holding Discipline:** You are cutting losers faster than you close winners. This is textbook good trading behavior. Keep trusting your early exit indicators on losing setups.")
+        
+    # Win Rate Recommendation
+    if win_rate < 40 and total_trades >= 5:
+        recommendations.append("⚠️ **Low Win Rate:** With a win rate below 40%, you might be forcing trades. \n\n* **Action:** Review your entry criteria. Consider trading less frequently and waiting for higher-probability A+ setups before deploying capital. \n* **Learn:** [How to Improve Your Trading Success Rate](https://www.investopedia.com/articles/active-trading/100914/how-improve-your-trading-success-rate.asp)")
+        
+    # Best Ticker Recommendation
+    if not eligible_tickers.empty and best_ticker_wr['Win_Rate'] >= 0.7:
+        recommendations.append(f"⭐ **Double Down on {best_ticker_wr.name}:** You have a highly successful track record ({best_ticker_wr['Win_Rate'] * 100:.0f}% win rate) trading **{best_ticker_wr.name}**. \n\n* **Action:** Consider scaling up your position sizing on A+ setups for this specific ticker. \n* **Learn:** [The Ultimate Guide to Position Sizing](https://www.investopedia.com/terms/p/positionsizing.asp)")
+
+    if recommendations:
+        for rec in recommendations:
+            if "Warning" in rec or "Alert" in rec or "Low" in rec:
+                st.warning(rec)
+            else:
+                st.success(rec)
+    else:
+        st.info("Keep trading! Once you have more data (winners, losers, and 3+ trades on a ticker), advanced behavioral recommendations and learning links will appear here.")
+
     st.markdown("---")
     
     # --- MONTHLY SUMMARY ---
