@@ -11,6 +11,25 @@ import calendar
 # Set calendar to start on Sunday
 calendar.setfirstweekday(calendar.SUNDAY)
 
+# --- CSS FOR SYMMETRY ---
+st.markdown("""
+    <style>
+    .stTable {
+        width: 100%;
+    }
+    th {
+        text-align: center !important;
+        background-color: #f0f2f6;
+    }
+    td {
+        text-align: center !important;
+        width: 14.28%; /* Perfectly symmetrical 7-column grid */
+        height: 60px;
+        vertical-align: middle !important;
+    }
+    </style>
+    """, unsafe_allow_stdio=True)
+
 def clean_amount(val):
     if pd.isna(val) or val == '': return 0.0
     val = str(val).replace('$', '').replace(',', '')
@@ -59,9 +78,9 @@ def fetch_dynamic_article(query):
             link = item.find('link').text
             clean_title = title.split(' - ')[0] 
             return f"[{clean_title}]({link})"
-    except Exception as e:
+    except:
         pass
-    return f"[Click here to search trending articles for '{query}'](https://www.google.com/search?q={urllib.parse.quote(query)})"
+    return f"[Search '{query}' on Google](https://www.google.com/search?q={urllib.parse.quote(query)})"
 
 def process_robinhood_csv(uploaded_file):
     df = pd.read_csv(uploaded_file, on_bad_lines='skip')
@@ -77,12 +96,6 @@ def process_robinhood_csv(uploaded_file):
 
     summary_rows = []
     for (ticker, core_desc), group in trades.groupby(['Instrument', 'Core_Description']):
-        asset_types = group['Asset Type'].unique()
-        final_type = 'Stock'
-        if 'Covered Call' in asset_types: final_type = 'Covered Call'
-        elif 'Option' in asset_types: final_type = 'Option'
-        elif 'Dividend' in asset_types: final_type = 'Dividend'
-        
         buys = group[group['Trans Code'].isin(['BTO', 'Buy', 'BTC'])]
         sells = group[group['Trans Code'].isin(['STC', 'Sell', 'STO', 'OEXP', 'CDIV'])]
         
@@ -98,10 +111,6 @@ def process_robinhood_csv(uploaded_file):
         buy_date = buys['Activity Date'].min() if not buys.empty else np.nan
         sell_date = sells['Activity Date'].max() if not sells.empty else np.nan
         
-        let_exp = 'Yes' if any(group['Trans Code'] == 'OEXP') else 'No'
-        pct_change = (net_change / total_buy_amt) if total_buy_amt > 0 else 0.0
-        
-        days_held = (sell_date - buy_date).days if pd.notna(sell_date) and pd.notna(buy_date) else None
         status = 'Closed' if pd.notna(buy_date) and pd.notna(sell_date) else 'Open'
 
         summary_rows.append({
@@ -112,156 +121,117 @@ def process_robinhood_csv(uploaded_file):
             'Total Buy': round(total_buy_amt, 2),
             'Avg Sell': round(avg_sell, 2),
             'Total Sell': round(total_sell_amt, 2),
-            '% Change': round(pct_change, 4),
+            '% Change': round((net_change / total_buy_amt), 4) if total_buy_amt > 0 else 0.0,
             'Net Change': round(net_change, 2),
-            'Buy Date': buy_date.strftime('%m/%d/%Y') if pd.notna(buy_date) else None,
-            'Sell Date': sell_date.strftime('%m/%d/%Y') if pd.notna(sell_date) else None,
-            'Days Held': days_held,
-            'Let Exp?': let_exp,
-            'Asset Category': final_type,
+            'Buy Date': buy_date,
+            'Sell Date': sell_date,
+            'Let Exp?': 'Yes' if any(group['Trans Code'] == 'OEXP') else 'No',
+            'Asset Category': group['Asset Type'].iloc[0],
             'Status': status
         })
 
-    df_summary = pd.DataFrame(summary_rows)
-    return df_summary
+    return pd.DataFrame(summary_rows)
 
 def render_dashboard_view(df_subset, category_name):
-    # Only show closed trades in the main dashboard view
+    # Filter for closed trades for metrics and calendar
     df_closed = df_subset[df_subset['Status'] == 'Closed'].copy()
     
     if df_closed.empty:
         st.info(f"No completed trades available for {category_name}.")
         return
 
-    df_closed['Days Held'] = pd.to_numeric(df_closed['Days Held'], errors='coerce')
-    df_closed['Buy DoW'] = pd.to_datetime(df_closed['Buy Date']).dt.day_name()
+    df_closed['Days Held'] = (df_closed['Sell Date'] - df_closed['Buy Date']).dt.days
+    df_closed['Buy DoW'] = df_closed['Buy Date'].dt.day_name()
     df_closed['Is_Put'] = df_closed['Contract Description'].str.contains('Put', case=False, na=False)
     df_closed['Is_Call'] = df_closed['Contract Description'].str.contains('Call', case=False, na=False)
     df_closed['Trade Style'] = np.where(df_closed['Days Held'] == 0, 'Day Trade', 'Swing Trade')
 
+    # Metric Row
     total_pnl = df_closed['Net Change'].sum()
-    total_trades = len(df_closed)
-    winners, losers = df_closed[df_closed['Net Change'] > 0], df_closed[df_closed['Net Change'] < 0]
-    win_rate = (len(winners) / (len(winners) + len(losers))) * 100 if (len(winners) + len(losers)) > 0 else 0
-    total_cost_basis = df_closed['Total Buy'].sum()
-    overall_roi = (total_pnl / total_cost_basis * 100) if total_cost_basis > 0 else 0
+    win_rate = (len(df_closed[df_closed['Net Change'] > 0]) / len(df_closed)) * 100
+    total_cost = df_closed['Total Buy'].sum()
+    roi = (total_pnl / total_cost * 100) if total_cost > 0 else 0
     
     col1, col2, col3, col4 = st.columns(4)
-    col1.metric("Total Net Profit/Loss", f"${total_pnl:,.2f}")
+    col1.metric("Realized P&L", f"${total_pnl:,.2f}")
     col2.metric("Win Rate", f"{win_rate:.1f}%")
-    col3.metric("Avg Trade ROI", f"{overall_roi:.1f}%")
-    col4.metric("Total Trades", total_trades)
+    col3.metric("Avg ROI", f"{roi:.1f}%")
+    col4.metric("Trades", len(df_closed))
     
     st.markdown("---")
 
-    st.markdown(f"### 🔬 Deep Dive: {category_name} Analytics")
-    ana_col1, ana_col2, ana_col3 = st.columns(3)
-    dt_df, sw_df = df_closed[df_closed['Trade Style'] == 'Day Trade'], df_closed[df_closed['Trade Style'] == 'Swing Trade']
-    with ana_col1:
-        st.markdown("**Trade Style Performance**")
-        st.write(f"📈 **Swing Trades:** ${sw_df['Net Change'].sum():,.2f} ({len(sw_df)} trades)")
-        st.write(f"⚡ **Day Trades:** ${dt_df['Net Change'].sum():,.2f} ({len(dt_df)} trades)")
+    # Calendar View with Sunday Start and Chromatic Sort
+    st.markdown(f"### 📅 {category_name} - Monthly Journal")
+    df_closed['Month_Sort'] = df_closed['Buy Date'].dt.to_period('M')
+    df_closed['Month_Str'] = df_closed['Buy Date'].dt.strftime('%B %Y')
+    
+    # Sort by the period index to ensure Jan, Feb, March order
+    monthly_options = df_closed.sort_values('Month_Sort')['Month_Str'].unique().tolist()
+    selected_month = st.selectbox("Select Month", monthly_options, key=f"cal_{category_name}")
+    
+    cal_data = df_closed[df_closed['Month_Str'] == selected_month].copy()
+    daily_pnl = cal_data.groupby(cal_data['Buy Date'].dt.day)['Net Change'].sum().to_dict()
+    
+    year, month_idx = cal_data['Buy Date'].iloc[0].year, cal_data['Buy Date'].iloc[0].month
+    matrix = calendar.monthcalendar(int(year), int(month_idx))
+    cal_df = pd.DataFrame(matrix, columns=['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'])
+    
+    def format_cell(day):
+        if day == 0: return ""
+        pnl = daily_pnl.get(day, 0)
+        return f"{day}\n${pnl:,.0f}" if pnl != 0 else str(day)
 
-    call_pnl = df_closed[df_closed['Is_Call'] == True]['Net Change'].sum()
-    put_pnl = df_closed[df_closed['Is_Put'] == True]['Net Change'].sum()
-    with ana_col2:
-        st.markdown("**Call vs. Put Focus**")
-        st.write(f"🐂 **Calls Net P&L:** ${call_pnl:,.2f}")
-        st.write(f"🐻 **Puts Net P&L:** ${put_pnl:,.2f}")
+    styled_cal = cal_df.map(format_cell)
+    
+    def color_pnl(val):
+        if "$" not in str(val): return 'text-align: center;'
+        try:
+            amt = float(val.split('$')[1].replace(',', ''))
+            if amt > 0: return 'background-color: #d4edda; color: #155724; font-weight: bold; text-align: center;'
+            if amt < 0: return 'background-color: #f8d7da; color: #721c24; font-weight: bold; text-align: center;'
+        except: pass
+        return 'text-align: center;'
 
-    dow_stats = df_closed.groupby('Buy DoW').agg(Net_Profit=('Net Change', 'sum')).reset_index()
-    if not dow_stats.empty:
-        best_day = dow_stats.loc[dow_stats['Net_Profit'].idxmax()]
-        worst_day = dow_stats.loc[dow_stats['Net_Profit'].idxmin()]
-        with ana_col3:
-            st.markdown("**Entry Day of Week**")
-            st.write(f"✅ **Best Day:** {best_day['Buy DoW']} (${best_day['Net_Profit']:,.0f})")
-            st.write(f"❌ **Worst Day:** {worst_day['Buy DoW']} (${worst_day['Net_Profit']:,.0f})")
-
-    st.markdown("---")
-    st.markdown(f"### 🧠 Trade Behavior & Efficiency")
-    avg_win = winners['Net Change'].mean() if not winners.empty else 0
-    avg_loss = losers['Net Change'].mean() if not losers.empty else 0
-    risk_reward = abs(avg_win / avg_loss) if avg_loss != 0 else 0
-    col_b1, col_b2, col_b3 = st.columns(3)
-    col_b1.metric("⚖️ Avg Win vs. Avg Loss", f"${avg_win:,.0f} / ${abs(avg_loss):,.0f}", f"Ratio: {risk_reward:.2f}x")
+    st.table(styled_cal.style.map(color_pnl))
     
     st.markdown("---")
-    st.markdown(f"### 📅 {category_name} - Monthly Calendar")
-    df_temp = df_closed.copy()
-    df_temp['Month_Date'] = pd.to_datetime(df_temp['Sell Date'], errors='coerce').fillna(pd.to_datetime(df_temp['Buy Date'], errors='coerce'))
-    valid_dates = df_temp.dropna(subset=['Month_Date']).copy()
-    
-    if not valid_dates.empty:
-        valid_dates['Month'] = valid_dates['Month_Date'].dt.strftime('%B %Y')
-        valid_dates['Month_Sort'] = valid_dates['Month_Date'].dt.to_period('M')
-        monthly_summary = valid_dates.groupby(['Month_Sort', 'Month']).agg(
-            Total_Trades=('Ticker', 'count'), Wins=('Net Change', lambda x: (x > 0).sum()),
-            Net_Profit=('Net Change', 'sum'), Unique_Tickers=('Ticker', 'nunique'),
-            Puts=('Is_Put', 'sum'), Calls=('Is_Call', 'sum')
-        ).reset_index().sort_values('Month_Sort', ascending=False)
-        
-        st.dataframe(monthly_summary.drop(columns=['Month_Sort']).rename(columns={'Wins': 'Profit Trades', 'Net_Profit': 'Total P&L'}), width='stretch')
+    st.markdown(f"### 📋 {category_name} - Trade Log")
+    # Clean up dates for display
+    display_df = df_subset.copy()
+    display_df['Buy Date'] = display_df['Buy Date'].dt.strftime('%m/%d/%Y')
+    display_df['Sell Date'] = display_df['Sell Date'].dt.strftime('%m/%d/%Y').replace('NaT', 'OPEN')
+    st.dataframe(display_df.drop(columns=['Month_Sort', 'Month_Str'], errors='ignore'), use_container_width=True)
 
-        st.markdown("#### Monthly Day-by-Day Audit")
-        selected_month = st.selectbox(f"Select Month to View Calendar ({category_name})", monthly_summary['Month'].tolist(), key=f"cal_{category_name}")
-        
-        cal_data = valid_dates[valid_dates['Month'] == selected_month].copy()
-        daily_pnl = cal_data.groupby(cal_data['Month_Date'].dt.day)['Net Change'].sum().to_dict()
-        
-        year = int(cal_data['Month_Date'].iloc[0].year)
-        month_idx = int(cal_data['Month_Date'].iloc[0].month)
-        month_cal = calendar.monthcalendar(year, month_idx)
-        
-        # Calendar DataFrame now starts with Sun
-        cal_df = pd.DataFrame(month_cal, columns=['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'])
-        
-        def format_cell(day):
-            if day == 0: return ""
-            pnl = daily_pnl.get(day, 0)
-            if pnl == 0: return f"{day}"
-            return f"{day}: ${pnl:,.0f}"
+# --- APP LAYOUT ---
+st.set_page_config(page_title="Robinhood Portfolio", layout="wide")
 
-        styled_cal = cal_df.map(format_cell)
-        
-        def color_pnl(val):
-            if ":" not in str(val): return ''
-            try:
-                pnl_val = float(val.split('$')[1].replace(',', ''))
-                if pnl_val > 0: return 'background-color: #d4edda; color: #155724; font-weight: bold; text-align: center;'
-                if pnl_val < 0: return 'background-color: #f8d7da; color: #721c24; font-weight: bold; text-align: center;'
-            except: pass
-            return 'text-align: center;'
+# Sidebar Intro
+st.sidebar.title("📈 Trade Intel")
+st.sidebar.info("""
+**Robinhood P&L Dashboard** This tool summarizes your account history, focusing on realized gains from options and covered calls.
+""")
 
-        st.table(styled_cal.style.map(color_pnl))
-        
-    st.markdown("---")
-    st.markdown(f"### 📋 {category_name} - Trade Details")
-    st.dataframe(df_temp.drop(columns=['Month_Date'], errors='ignore'), width='stretch')
+st.sidebar.markdown("---")
 
-# --- STREAMLIT UI ---
-st.set_page_config(page_title="Robinhood P&L Dashboard", layout="wide")
-
-st.sidebar.markdown("👨‍💻 **Created by Puneeth Rao**")
-st.sidebar.markdown("🔗 [Connect with me on LinkedIn](https://www.linkedin.com/in/puneeth-rao/)")
-
-st.title("📈 Interactive Robinhood P&L Dashboard")
 uploaded_file = st.file_uploader("Upload Robinhood CSV", type=["csv"])
 
-if uploaded_file is not None:
-    df_result = process_robinhood_csv(uploaded_file)
+if uploaded_file:
+    df_raw = process_robinhood_csv(uploaded_file)
     
-    # 1. Sidebar Metric for Open Options Cost Basis
-    open_options = df_result[(df_result['Status'] == 'Open') & (df_result['Asset Category'].isin(['Option', 'Covered Call']))]
-    open_cost_basis = open_options['Total Buy'].sum()
-    st.sidebar.metric("Open Options Cost Basis", f"${open_cost_basis:,.2f}")
+    # 1. Sidebar Metrics for Open Positions
+    open_ops = df_raw[(df_raw['Status'] == 'Open') & (df_raw['Asset Category'].isin(['Option', 'Covered Call']))]
+    st.sidebar.metric("Open Option Count", len(open_ops))
+    st.sidebar.metric("Open Options Equity", f"${open_ops['Total Buy'].sum():,.2f}")
     
-    # Filtering for Dashboard view
-    df_filtered = df_result[df_result['Asset Category'].isin(['Option', 'Covered Call'])]
-    available_categories = sorted(df_filtered['Asset Category'].unique().tolist())
-    tab_names = ["All Data"] + available_categories
-    tabs = st.tabs(tab_names)
+    st.sidebar.markdown("---")
+    st.sidebar.markdown("👨‍💻 **Puneeth Rao**")
+    
+    # Dashboard Tabs
+    df_options = df_raw[df_raw['Asset Category'].isin(['Option', 'Covered Call'])]
+    available_cats = ["All Data"] + sorted(df_options['Asset Category'].unique().tolist())
+    tabs = st.tabs(available_cats)
     
     for i, tab in enumerate(tabs):
         with tab:
-            render_dashboard_view(df_filtered if tab_names[i] == "All Data" else df_filtered[df_filtered['Asset Category'] == tab_names[i]], tab_names[i])
+            cat = available_cats[i]
+            render_dashboard_view(df_options if cat == "All Data" else df_options[df_options['Asset Category'] == cat], cat)
