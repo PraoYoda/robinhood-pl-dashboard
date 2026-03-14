@@ -2,7 +2,6 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import re
-import io
 import urllib.request
 import urllib.parse
 import xml.etree.ElementTree as ET
@@ -38,9 +37,7 @@ def clean_quantity(val):
 def get_asset_type(row):
     trans = str(row['Trans Code'])
     desc = str(row['Description']).upper()
-    if trans == 'CDIV': return 'Dividend'
     if any(x in desc for x in [' CALL ', ' PUT ', ' CALL $', ' PUT $']):
-        if trans == 'STO': return 'Covered Call'
         return 'Option'
     return 'Stock'
 
@@ -52,9 +49,9 @@ def get_core_desc(row):
     return desc.strip()
 
 @st.cache_data(ttl=3600)
-def fetch_dynamic_article(query):
+def fetch_dynamic_intel(ticker):
     try:
-        url = f"https://news.google.com/rss/search?q={urllib.parse.quote(query)}"
+        url = f"https://news.google.com/rss/search?q={urllib.parse.quote(ticker + ' options market')}"
         req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
         with urllib.request.urlopen(req, timeout=3) as response:
             xml_data = response.read()
@@ -65,7 +62,7 @@ def fetch_dynamic_article(query):
             link = item.find('link').text
             return f"[{title.split(' - ')[0]}]({link})"
     except: pass
-    return f"[Search '{query}' on Google](https://www.google.com/search?q={urllib.parse.quote(query)})"
+    return f"[Analyze {ticker} Volatility](https://www.google.com/search?q={urllib.parse.quote(ticker + ' implied volatility')})"
 
 # --- CORE PROCESSING ---
 def process_robinhood_csv(uploaded_file):
@@ -76,14 +73,14 @@ def process_robinhood_csv(uploaded_file):
     df['Asset Type'] = df.apply(get_asset_type, axis=1)
     df['Core_Description'] = df.apply(get_core_desc, axis=1)
 
-    trade_codes = ['BTO', 'STC', 'STO', 'BTC', 'Buy', 'Sell', 'OEXP', 'CDIV']
+    trade_codes = ['BTO', 'STC', 'STO', 'BTC', 'Buy', 'Sell', 'OEXP']
     trades = df[df['Trans Code'].isin(trade_codes)].copy()
     trades = trades.sort_values(['Instrument', 'Core_Description', 'Activity Date'])
 
     summary_rows = []
     for (ticker, core_desc), group in trades.groupby(['Instrument', 'Core_Description']):
         buys = group[group['Trans Code'].isin(['BTO', 'Buy', 'BTC'])]
-        sells = group[group['Trans Code'].isin(['STC', 'Sell', 'STO', 'OEXP', 'CDIV'])]
+        sells = group[group['Trans Code'].isin(['STC', 'Sell', 'STO', 'OEXP'])]
         
         total_buy_qty = buys['Quantity_Clean'].sum()
         total_buy_amt = abs(buys[buys['Amount_Clean'] < 0]['Amount_Clean'].sum())
@@ -95,10 +92,9 @@ def process_robinhood_csv(uploaded_file):
         status = 'Closed' if pd.notna(buy_date) and pd.notna(sell_date) else 'Open'
 
         summary_rows.append({
-            'Ticker': ticker, 'Contract Description': core_desc, '# Cons/Shares': total_buy_qty if total_buy_qty > 0 else sells['Quantity_Clean'].sum(),
-            'Avg Buy': round(total_buy_amt / total_buy_qty, 2) if total_buy_qty > 0 else 0,
+            'Ticker': ticker, 'Contract Description': core_desc, '# Cons': total_buy_qty if total_buy_qty > 0 else sells['Quantity_Clean'].sum(),
             'Total Buy': round(total_buy_amt, 2), 'Total Sell': round(total_sell_amt, 2),
-            'Net Change': round(net_change, 2), 'Buy Date': buy_date, 'Sell Date': sell_date, 'Let Exp?': 'Yes' if any(group['Trans Code'] == 'OEXP') else 'No',
+            'Net Change': round(net_change, 2), 'Buy Date': buy_date, 'Sell Date': sell_date,
             'Asset Category': group['Asset Type'].iloc[0], 'Status': status
         })
     return pd.DataFrame(summary_rows)
@@ -106,92 +102,65 @@ def process_robinhood_csv(uploaded_file):
 def render_dashboard_view(df_subset, category_name):
     df_closed = df_subset[df_subset['Status'] == 'Closed'].copy()
     if df_closed.empty:
-        st.info(f"No completed trades available for {category_name}.")
+        st.info("No completed trades found.")
         return
 
-    # Calculations
     df_closed['Days Held'] = (df_closed['Sell Date'] - df_closed['Buy Date']).dt.days
-    df_closed['Buy DoW'] = df_closed['Buy Date'].dt.day_name()
-    df_closed['Is_Put'] = df_closed['Contract Description'].str.contains('Put', case=False, na=False)
     df_closed['Is_Call'] = df_closed['Contract Description'].str.contains('Call', case=False, na=False)
-    df_closed['Trade Style'] = np.where(df_closed['Days Held'] == 0, 'Day Trade', 'Swing Trade')
-
+    
     total_pnl = df_closed['Net Change'].sum()
     win_rate = (len(df_closed[df_closed['Net Change'] > 0]) / len(df_closed)) * 100
     
     col1, col2, col3, col4 = st.columns(4)
-    col1.metric("Total Net Profit/Loss", f"${total_pnl:,.2f}")
+    col1.metric("Total Net P/L", f"${total_pnl:,.2f}")
     col2.metric("Win Rate", f"{win_rate:.1f}%")
-    col3.metric("Avg ROI", f"{(total_pnl / df_closed['Total Buy'].sum() * 100) if df_closed['Total Buy'].sum() > 0 else 0:.1f}%")
+    col3.metric("Avg Trade P/L", f"${total_pnl/len(df_closed):,.2f}")
     col4.metric("Total Trades", len(df_closed))
     
     st.markdown("---")
     
-    # --- PERFORMANCE ANALYTICS: TOP 5 / BOTTOM 5 & CHARTS ---
+    # --- PERFORMANCE ANALYTICS: TOP/BOTTOM 5 ---
     st.markdown("### 📊 Performance Analytics")
-    
     ticker_stats = df_closed.groupby('Ticker').agg(
         Net_Profit=('Net Change', 'sum'),
         Avg_Win=('Net Change', lambda x: x[x > 0].mean() if not x[x > 0].empty else 0),
-        Avg_Loss=('Net Change', lambda x: x[x < 0].mean() if not x[x < 0].empty else 0),
-        Win_Count=('Net Change', lambda x: (x > 0).sum()),
-        Total_Count=('Net Change', 'count')
+        Avg_Loss=('Net Change', lambda x: x[x < 0].mean() if not x[x < 0].empty else 0)
     ).fillna(0)
-    ticker_stats['Win_Rate'] = (ticker_stats['Win_Count'] / ticker_stats['Total_Count']) * 100
 
-    perf_col_left, perf_col_right = st.columns(2)
-    
-    with perf_col_left:
+    p_col1, p_col2 = st.columns(2)
+    with p_col1:
         st.subheader("🏆 Top 5 Winners")
-        top_5 = ticker_stats.sort_values(by='Net_Profit', ascending=False).head(5)
-        st.table(top_5[['Net_Profit', 'Avg_Win']].style.format("${:,.2f}"))
-        
-        # Add Win Rate Bar Chart for Top 5
-        st.markdown("**Win Rate % (Top 5 Tickers)**")
-        st.bar_chart(top_5['Win_Rate'])
-        
-    with perf_col_right:
+        st.table(ticker_stats.sort_values(by='Net_Profit', ascending=False).head(5)[['Net_Profit', 'Avg_Win']].style.format("${:,.2f}"))
+    with p_col2:
         st.subheader("📉 Bottom 5 Losers")
-        bot_5 = ticker_stats.sort_values(by='Net_Profit', ascending=True).head(5)
-        st.table(bot_5[['Net_Profit', 'Avg_Loss']].style.format("${:,.2f}"))
-        
-        # Add Trade Volume Chart for Bottom 5
-        st.markdown("**Trade Frequency (Bottom 5 Tickers)**")
-        st.bar_chart(bot_5['Total_Count'])
+        st.table(ticker_stats.sort_values(by='Net_Profit', ascending=True).head(5)[['Net_Profit', 'Avg_Loss']].style.format("${:,.2f}"))
 
     st.markdown("---")
 
-    # --- DEEP DIVE ANALYTICS ---
-    st.markdown(f"### 🔬 Deep Dive: {category_name} Insights")
-    
-    avg_p_l = total_pnl / len(df_closed) if len(df_closed) > 0 else 0
-    
-    ana_col1, ana_col2, ana_col3 = st.columns(3)
-    with ana_col1:
-        st.markdown("**Core Profitability**")
-        st.write(f"💵 **Avg P/L per Trade:** ${avg_p_l:,.2f}")
-        st.caption("Signifies your 'expected value' for every position opened.")
-        st.write(f"📈 **Swing Net:** ${df_closed[df_closed['Trade Style'] == 'Swing Trade']['Net Change'].sum():,.2f}")
-    with ana_col2:
-        st.markdown("**Directional Bias**")
-        st.write(f"🐂 **Calls Net:** ${df_closed[df_closed['Is_Call']]['Net Change'].sum():,.2f}")
-        st.write(f"🐻 **Puts Net:** ${df_closed[df_closed['Is_Put']]['Net Change'].sum():,.2f}")
-    with ana_col3:
-        st.markdown("**Efficiency**")
-        dow_stats = df_closed.groupby('Buy DoW')['Net Change'].sum()
-        st.write(f"✅ **Best Day:** {dow_stats.idxmax()}")
-        st.write(f"❌ **Worst Day:** {dow_stats.idxmin()}")
+    # --- DYNAMIC RECOMMENDATIONS & INTEL ---
+    st.markdown("### 💡 Dynamic Options Intelligence")
+    top_ticker = ticker_stats['Net_Profit'].idxmax()
+    worst_ticker = ticker_stats['Net_Profit'].idxmin()
+    call_pnl = df_closed[df_closed['Is_Call']]['Net Change'].sum()
+    put_pnl = df_closed[~df_closed['Is_Call']]['Net Change'].sum()
+
+    rec_col1, rec_col2 = st.columns(2)
+    with rec_col1:
+        st.success(f"🔥 **Strength Lead:** {top_ticker}")
+        st.write(f"Latest Intel: {fetch_dynamic_intel(top_ticker)}")
+        bias = "Calls" if call_pnl > put_pnl else "Puts"
+        st.write(f"**Strategy Note:** Your data suggests a profitable bias toward **{bias}**.")
+    with rec_col2:
+        st.error(f"⚠️ **Efficiency Gap:** {worst_ticker}")
+        st.write(f"Market Context: {fetch_dynamic_intel(worst_ticker)}")
+        st.write(f"**Risk Note:** High frequency of losses in {worst_ticker} may indicate a need to adjust strike selection.")
 
     st.markdown("---")
 
-    # MONTHLY CALENDAR
-    st.markdown(f"### 📅 {category_name} - Monthly Journal")
-    df_closed['Month_Sort'] = df_closed['Buy Date'].dt.to_period('M')
+    # --- MONTHLY CALENDAR ---
+    st.markdown("### 📅 Monthly P&L Journal")
     df_closed['Month_Str'] = df_closed['Buy Date'].dt.strftime('%B %Y')
-    
-    month_options = df_closed.sort_values('Month_Sort')['Month_Str'].unique().tolist()
-    selected_month = st.selectbox("Select Month", month_options, key=f"cal_{category_name}")
-    
+    selected_month = st.selectbox("Select Month", df_closed['Month_Str'].unique(), key=f"cal_{category_name}")
     cal_data = df_closed[df_closed['Month_Str'] == selected_month].copy()
     daily_pnl = cal_data.groupby(cal_data['Buy Date'].dt.day)['Net Change'].sum().to_dict()
     year, month_idx = cal_data['Buy Date'].iloc[0].year, cal_data['Buy Date'].iloc[0].month
@@ -199,43 +168,30 @@ def render_dashboard_view(df_subset, category_name):
     cal_df = pd.DataFrame(matrix, columns=['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'])
     
     styled_cal = cal_df.map(lambda d: f"{d}\n${daily_pnl.get(d, 0):,.0f}" if d != 0 and daily_pnl.get(d, 0) != 0 else (str(d) if d != 0 else ""))
-    
     def color_pnl(val):
         if "$" not in str(val): return 'text-align: center;'
         amt = float(val.split('$')[1].replace(',', ''))
-        color = '#d4edda' if amt > 0 else '#f8d7da'
-        return f'background-color: {color}; font-weight: bold; text-align: center;'
-
+        return f"background-color: {'#d4edda' if amt > 0 else '#f8d7da'}; font-weight: bold; text-align: center;"
     st.table(styled_cal.style.map(color_pnl))
-    
-    st.markdown("---")
-    st.markdown(f"### 📋 Trade Log")
-    display_df = df_subset.copy()
-    display_df['Buy Date'] = display_df['Buy Date'].dt.strftime('%m/%d/%Y')
-    display_df['Sell Date'] = display_df['Sell Date'].dt.strftime('%m/%d/%Y').replace('NaT', 'OPEN')
-    st.dataframe(display_df.drop(columns=['Month_Sort', 'Month_Str'], errors='ignore'), use_container_width=True)
 
 # --- STREAMLIT UI ---
 st.set_page_config(page_title="Robinhood Dashboard", layout="wide", page_icon="📈")
-st.title("📈 Interactive Robinhood P&L Dashboard")
+st.title("📈 Interactive Robinhood Options Dashboard")
 
 st.sidebar.title("📊 Account Insights")
 st.sidebar.markdown("[🔗 View My LinkedIn Profile](https://www.linkedin.com/in/puneeth-rao-9154b511/)")
+search_query = st.sidebar.text_input("🔍 Search Ticker or Contract", "").strip().upper()
 st.sidebar.markdown("---")
 
 uploaded_file = st.file_uploader("Upload Robinhood CSV", type=["csv"])
 
 if uploaded_file:
     df_raw = process_robinhood_csv(uploaded_file)
-    open_ops = df_raw[(df_raw['Status'] == 'Open') & (df_raw['Asset Category'].isin(['Option', 'Covered Call']))]
-    st.sidebar.metric("Open Position Count", len(open_ops))
-    st.sidebar.metric("Open Options Equity", f"${open_ops['Total Buy'].sum():,.2f}")
-    st.sidebar.markdown("---")
+    if search_query:
+        df_raw = df_raw[df_raw['Ticker'].str.contains(search_query, na=False) | df_raw['Contract Description'].str.contains(search_query, na=False)]
+    
+    st.sidebar.metric("Active Options Contracts", len(df_raw[df_raw['Status'] == 'Open']))
     st.sidebar.markdown("👨‍💻 **Puneeth Rao**")
 
-    df_final = df_raw[df_raw['Asset Category'].isin(['Option', 'Covered Call'])]
-    categories = ["All Data"] + sorted(df_final['Asset Category'].unique().tolist())
-    tabs = st.tabs(categories)
-    for i, tab in enumerate(tabs):
-        with tab:
-            render_dashboard_view(df_final if categories[i] == "All Data" else df_final[df_final['Asset Category'] == categories[i]], categories[i])
+    df_options = df_raw[df_raw['Asset Category'] == 'Option']
+    render_dashboard_view(df_options, "Options")
