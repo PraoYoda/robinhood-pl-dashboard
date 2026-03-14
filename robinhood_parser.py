@@ -30,27 +30,30 @@ def get_asset_type(row):
         return 'Option'
     return 'Stock'
 
-def get_strategy(row):
-    desc = str(row['Description']).upper()
-    if 'CALL' in desc: return 'Long Call' if row['Asset Category'] == 'Option' else 'Covered Call'
-    if 'PUT' in desc: return 'Long Put'
-    return 'Equity'
-
-@st.cache_data(ttl=3600)
-def fetch_dynamic_article(query):
-    try:
-        url = f"https://news.google.com/rss/search?q={urllib.parse.quote(query)}"
-        req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
-        with urllib.request.urlopen(req, timeout=3) as response:
-            xml_data = response.read()
-        root = ET.fromstring(xml_data)
-        item = root.find('.//channel/item')
-        if item is not None:
-            title = item.find('title').text
-            link = item.find('link').text
-            return f"[{title.split(' - ')[0]}]({link})"
-    except: pass
-    return f"[Search: {query}](https://www.google.com/search?q={urllib.parse.quote(query)})"
+def calculate_streaks(df):
+    """Calculates current and longest win/loss streaks."""
+    if df.empty: return 0, 0
+    df = df.sort_values('Close Date')
+    results = (df['Net Change'] > 0).astype(int).tolist()
+    
+    current_streak = 0
+    if results:
+        last_val = results[-1]
+        for r in reversed(results):
+            if r == last_val: current_streak += 1
+            else: break
+        if last_val == 0: current_streak = -current_streak
+    
+    # Calculate Max Streak
+    max_win_streak = 0
+    temp_streak = 0
+    for r in results:
+        if r == 1:
+            temp_streak += 1
+            max_win_streak = max(max_win_streak, temp_streak)
+        else: temp_streak = 0
+            
+    return current_streak, max_win_streak
 
 def process_robinhood_csv(uploaded_file):
     df = pd.read_csv(uploaded_file, on_bad_lines='skip')
@@ -80,125 +83,103 @@ def process_robinhood_csv(uploaded_file):
             'Days Held': days_held,
             'Status': status,
             'Asset Category': group['Asset Category'].iloc[0],
-            'Strategy': get_strategy(group.iloc[0]),
             'Close Date': sell_date,
             'Buy Date': buy_date
         })
     return pd.DataFrame(summary_rows)
 
-# --- 2. UI LAYOUT ---
-st.set_page_config(page_title="Robinhood Mastery Dashboard", layout="wide")
+def render_strategy_dashboard(df, title, show_coaching=True):
+    if df.empty:
+        st.info(f"No completed {title} trades found.")
+        return
 
-st.sidebar.title("🛠️ Trader's Toolkit")
+    # --- TIMEFRAME ---
+    start_date = df['Buy Date'].min().strftime('%b %d, %Y')
+    end_date = df['Close Date'].max().strftime('%b %d, %Y')
+    st.subheader(f"📊 {title} Performance ({start_date} - {end_date})")
+
+    # --- MOMENTUM & KPIs ---
+    current_streak, max_win = calculate_streaks(df)
+    
+    m1, m2, m3, m4 = st.columns(4)
+    total_pnl = df['Net Change'].sum()
+    tax_toggle = st.session_state.get('tax_toggle', False)
+    display_pnl = total_pnl * 0.75 if tax_toggle and total_pnl > 0 else total_pnl
+    
+    m1.metric("Total P&L", f"${display_pnl:,.2f}")
+    m2.metric("Win Rate", f"{(len(df[df['Net Change'] > 0])/len(df)*100):.1f}%")
+    
+    # Momentum Metric
+    streak_label = "🔥 Current Win Streak" if current_streak > 0 else "❄️ Current Loss Streak"
+    m3.metric(streak_label, f"{abs(current_streak)} Trades", f"Best: {max_win}")
+    
+    m4.metric("Total Trades", len(df))
+
+    # --- EQUITY CURVE ---
+    df = df.sort_values('Close Date')
+    df['Cumulative P&L'] = df['Net Change'].cumsum()
+    st.line_chart(df.set_index('Close Date')['Cumulative P&L'])
+
+    # --- MONTHLY SUMMARY ---
+    st.markdown("### 🗓️ Monthly Summary")
+    df['Month'] = df['Close Date'].dt.strftime('%B %Y')
+    df['Month_Sort'] = df['Close Date'].dt.to_period('M')
+    
+    monthly = df.groupby(['Month_Sort', 'Month']).agg(
+        Trades=('Ticker', 'count'),
+        Wins=('Net Change', lambda x: (x > 0).sum()),
+        Losses=('Net Change', lambda x: (x < 0).sum()),
+        Net_P_L=('Net Change', 'sum'),
+        Tickers=('Ticker', 'nunique')
+    ).reset_index().sort_values('Month_Sort', ascending=False)
+    
+    st.dataframe(monthly.drop(columns=['Month_Sort']).style.format({'Net_P_L': '${:,.2f}'}), width='stretch')
+
+    # --- TICKER LEADERBOARD ---
+    st.markdown("### 🏆 Ticker Leaderboard")
+    ticker_stats = df.groupby('Ticker').agg(PNL=('Net Change', 'sum'), Count=('Ticker', 'count')).reset_index()
+    c1, c2 = st.columns(2)
+    c1.write("**Best Tickers**")
+    c1.dataframe(ticker_stats.sort_values('PNL', ascending=False).head(5), hide_index=True)
+    c2.write("**Worst Tickers**")
+    c2.dataframe(ticker_stats.sort_values('PNL', ascending=True).head(5), hide_index=True)
+
+    if show_coaching:
+        st.markdown("---")
+        st.markdown("### 🧠 Momentum Coaching")
+        if current_streak >= 3:
+            st.success(f"You're on a roll with {current_streak} wins! Trust your process, but don't get overconfident with position sizes.")
+        elif current_streak <= -3:
+            st.error(f"Tough run of {abs(current_streak)} losses. Consider cutting your position size in half until you land your next win.")
+
+# --- 2. MAIN UI ---
+st.set_page_config(page_title="Robinhood Mastery", layout="wide")
+
+st.sidebar.title("🛠️ Settings")
+st.session_state['tax_toggle'] = st.sidebar.checkbox("Show Est. 25% Tax Deduction", value=False)
+st.sidebar.markdown("---")
 st.sidebar.markdown("👨‍💻 **Created by Puneeth Rao**")
-st.sidebar.markdown("🔗 [Connect with me on LinkedIn](https://www.linkedin.com/in/puneeth-rao/)")
-tax_toggle = st.sidebar.checkbox("Show Est. 25% Tax Deduction", value=False)
+st.sidebar.markdown("🔗 [LinkedIn](https://www.linkedin.com/in/puneeth-rao/)")
 
-st.title("📈 Robinhood Options Mastery Dashboard")
+st.title("📈 Robinhood Strategy Dashboard")
 
 uploaded_file = st.file_uploader("Upload Robinhood CSV", type=["csv"])
 
 if uploaded_file:
     df_raw = process_robinhood_csv(uploaded_file)
-    # Filter for realized options/covered calls
-    df_res = df_raw[(df_raw['Status'] == 'Closed') & (df_raw['Asset Category'].isin(['Option', 'Covered Call']))].sort_values('Close Date')
+    df_all = df_raw[df_raw['Status'] == 'Closed'].copy()
 
-    if df_res.empty:
-        st.warning("No completed options trades found.")
-    else:
-        # --- TIMEFRAME HEADER ---
-        start_date = df_res['Buy Date'].min().strftime('%b %d, %Y')
-        end_date = df_res['Close Date'].max().strftime('%b %d, %Y')
-        st.info(f"🗓️ **Report Timeframe:** {start_date} to {end_date} ({len(df_res)} Trades)")
+    df_options = df_all[df_all['Asset Category'] == 'Option']
+    df_cc = df_all[df_all['Asset Category'] == 'Covered Call']
 
-        # --- TOP LEVEL KPIs ---
-        total_pnl = df_res['Net Change'].sum()
-        winners = df_res[df_res['Net Change'] > 0]
-        losers = df_res[df_res['Net Change'] < 0]
-        
-        m1, m2, m3, m4 = st.columns(4)
-        
-        display_pnl = total_pnl * 0.75 if tax_toggle and total_pnl > 0 else total_pnl
-        pnl_label = "Net Profit (After Tax)" if tax_toggle else "Gross Profit"
-        
-        m1.metric(pnl_label, f"${display_pnl:,.2f}")
-        m2.metric("Win Rate", f"{(len(winners)/len(df_res)*100):.1f}%")
-        m3.metric("Avg Trade ROI", f"{df_res['ROI %'].mean():.1f}%")
-        m4.metric("Avg Hold Time", f"{df_res['Days Held'].mean():.1f} Days")
+    tab1, tab2, tab3 = st.tabs(["🔥 Standard Options", "🛡️ Covered Calls", "📋 Full Trade Log"])
 
-        st.markdown("---")
-
-        # --- TABS ---
-        t1, t2, t3, t4 = st.tabs(["🗓️ Monthly Summary", "📈 Equity Curve", "🏆 Leaderboard", "🧠 Strategy & Coaching"])
-
-        with t1:
-            st.markdown("### 🗓️ Monthly Performance Tracker")
-            df_res['Month'] = df_res['Close Date'].dt.strftime('%B %Y')
-            df_res['Month_Sort'] = df_res['Close Date'].dt.to_period('M')
-            df_res['Is_Put'] = df_res['Description'].str.contains('Put', case=False, na=False)
-            df_res['Is_Call'] = df_res['Description'].str.contains('Call', case=False, na=False)
-            
-            monthly = df_res.groupby(['Month_Sort', 'Month']).agg(
-                Total_Trades=('Ticker', 'count'),
-                Wins=('Net Change', lambda x: (x > 0).sum()),
-                Losses=('Net Change', lambda x: (x < 0).sum()),
-                Net_Profit=('Net Change', 'sum'),
-                Unique_Tickers=('Ticker', 'nunique'),
-                No_of_PUTS=('Is_Put', 'sum'),
-                No_of_CALLS=('Is_Call', 'sum')
-            ).reset_index().sort_values('Month_Sort', ascending=False)
-
-            if tax_toggle:
-                monthly['Net_Profit_After_Tax'] = monthly['Net_Profit'].apply(lambda x: x * 0.75 if x > 0 else x)
-                monthly.rename(columns={'Net_Profit_After_Tax': 'Net P&L (Post-Tax)'}, inplace=True)
-            
-            monthly.rename(columns={
-                'Wins': 'Profit Trades', 
-                'Losses': 'Loss Trades', 
-                'Net_Profit': 'Total Net P&L',
-                'Unique_Tickers': 'Tickers'
-            }, inplace=True)
-            
-            st.dataframe(monthly.drop(columns=['Month_Sort']).style.format({'Total Net P&L': '${:,.2f}', 'Net P&L (Post-Tax)': '${:,.2f}'}), width='stretch')
-            st.bar_chart(monthly.set_index('Month')['Total Net P&L'])
-
-        with t2:
-            st.subheader("📈 Cumulative P&L (Equity Curve)")
-            df_res['Cumulative P&L'] = df_res['Net Change'].cumsum()
-            st.line_chart(df_res.set_index('Close Date')['Cumulative P&L'])
-
-        with t3:
-            st.markdown("### 🏆 Ticker Leaderboard")
-            ticker_stats = df_res.groupby('Ticker').agg(PNL=('Net Change', 'sum'), Trades=('Ticker', 'count')).reset_index()
-            c_left, c_right = st.columns(2)
-            c_left.write("**Top Profit Makers**")
-            c_left.dataframe(ticker_stats.sort_values('PNL', ascending=False).head(5), hide_index=True)
-            c_right.write("**Top Account Killers**")
-            c_right.dataframe(ticker_stats.sort_values('PNL', ascending=True).head(5), hide_index=True)
-
-        with t4:
-            st.markdown("### 🧠 Strategy & Behavior")
-            b_left, b_right = st.columns([2, 1])
-            with b_left:
-                strat_df = df_res.groupby('Strategy').agg(PNL=('Net Change', 'sum'), ROI=('ROI %', 'mean'), count=('Ticker', 'count'))
-                st.table(strat_df.style.format({'PNL': '${:,.2f}', 'ROI': '{:.1f}%'}))
-            
-            with b_right:
-                avg_loss_val = abs(losers['Net Change'].mean()) if not losers.empty else 0
-                st.write(f"Avg Loss: **${avg_loss_val:,.2f}**")
-                risk_val = st.number_input("Risk Limit per Trade ($)", value=float(round(avg_loss_val,0)) if avg_loss_val > 0 else 100.0)
-                st.success(f"**Max Capital Suggestion:** ${risk_val * 10:,.0f}")
-
-            st.markdown("#### Dynamic Coaching Insights")
-            if not losers.empty and not winners.empty:
-                if losers['Days Held'].mean() > winners['Days Held'].mean():
-                    st.warning(f"🚨 **Bag Holding Alert:** Read: {fetch_dynamic_article('psychology of cutting losses short')}")
-                else:
-                    st.success("✅ Excellent exit discipline—you cut losers fast.")
-
-        st.markdown("---")
-        with st.expander("📋 View Full Detailed Trade Log"):
-            st.dataframe(df_res.drop(columns=['Status', 'Asset Category', 'Cumulative P&L', 'Month', 'Month_Sort', 'Is_Put', 'Is_Call']), width='stretch')
-
-        csv_out = df_res.to_csv(index=False).encode('utf-8')
-        st.download_button("📥 Download Analysis CSV", csv_out, "Robinhood_Mastery_Report.csv", "text/csv")
+    with tab1:
+        render_strategy_dashboard(df_options, "Standard Options", show_coaching=True)
+    with tab2:
+        render_strategy_dashboard(df_cc, "Covered Calls", show_coaching=False)
+    with tab3:
+        st.subheader("Full Historical Log")
+        st.dataframe(df_all.drop(columns=['Status', 'Asset Category']), width='stretch')
+        csv_out = df_all.to_csv(index=False).encode('utf-8')
+        st.download_button("📥 Download Clean CSV", csv_out, "Robinhood_Clean_History.csv", "text/csv")
