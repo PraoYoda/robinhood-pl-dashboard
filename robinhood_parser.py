@@ -120,6 +120,9 @@ def process_robinhood_csv(uploaded_file):
         })
 
     df_summary = pd.DataFrame(summary_rows)
+    # --- NEW FILTER: Keep only closed trades ---
+    df_summary = df_summary[df_summary['Status'] == 'Closed'].copy()
+    
     df_summary['Sort_Date'] = pd.to_datetime(df_summary['Buy Date'], errors='coerce')
     df_summary = df_summary.sort_values('Sort_Date', ascending=False).drop(columns=['Sort_Date'])
     return df_summary
@@ -129,7 +132,6 @@ def render_dashboard_view(df_subset, category_name):
         st.info(f"No completed trades available for {category_name}.")
         return
 
-    # Use .copy() to solve SettingWithCopyWarning
     df_subset = df_subset.copy()
     df_subset['Days Held'] = pd.to_numeric(df_subset['Days Held'], errors='coerce')
     df_subset['Buy DoW'] = pd.to_datetime(df_subset['Buy Date']).dt.day_name()
@@ -219,7 +221,6 @@ def render_dashboard_view(df_subset, category_name):
             if pnl == 0: return f"{day}"
             return f"{day}: ${pnl:,.0f}"
 
-        # FIX: Changed .applymap to .map
         styled_cal = cal_df.map(format_cell)
         
         def color_pnl(val):
@@ -231,7 +232,6 @@ def render_dashboard_view(df_subset, category_name):
             except: pass
             return ''
 
-        # FIX: Changed .style.applymap to .style.map
         st.table(styled_cal.style.map(color_pnl))
         
     st.markdown("---")
