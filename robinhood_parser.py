@@ -16,7 +16,7 @@ st.markdown("""
     <style>
     .stTable { width: 100%; }
     th { text-align: center !important; background-color: #f0f2f6; font-weight: bold; }
-    td { text-align: center !important; width: 14.28%; height: 75px; vertical-align: middle !important; font-size: 14px; }
+    td { text-align: center !important; height: 60px; vertical-align: middle !important; font-size: 14px; }
     </style>
     """, unsafe_allow_html=True)
 
@@ -127,33 +127,41 @@ def render_dashboard_view(df_subset, category_name):
     
     st.markdown("---")
     
-    # 📝 PERFORMANCE ANALYTICS (FORMERLY MARKET INTEL)
+    # --- PERFORMANCE ANALYTICS: TOP 5 / BOTTOM 5 & CHARTS ---
     st.markdown("### 📊 Performance Analytics")
     
-    # Ticker Table Logic: Top Winner & Top Loser
     ticker_stats = df_closed.groupby('Ticker').agg(
         Net_Profit=('Net Change', 'sum'),
-        Avg_Win=('Net Change', lambda x: x[x > 0].mean()),
-        Avg_Loss=('Net Change', lambda x: x[x < 0].mean()),
-        Trade_Count=('Net Change', 'count')
+        Avg_Win=('Net Change', lambda x: x[x > 0].mean() if not x[x > 0].empty else 0),
+        Avg_Loss=('Net Change', lambda x: x[x < 0].mean() if not x[x < 0].empty else 0),
+        Win_Count=('Net Change', lambda x: (x > 0).sum()),
+        Total_Count=('Net Change', 'count')
     ).fillna(0)
+    ticker_stats['Win_Rate'] = (ticker_stats['Win_Count'] / ticker_stats['Total_Count']) * 100
 
-    st.dataframe(ticker_stats.sort_values(by='Net_Profit', ascending=False), use_container_width=True)
-
-    best_ticker = ticker_stats['Net_Profit'].idxmax()
-    worst_ticker = ticker_stats['Net_Profit'].idxmin()
+    perf_col_left, perf_col_right = st.columns(2)
     
-    rec_col1, rec_col2 = st.columns(2)
-    with rec_col1:
-        st.success(f"📈 **Top Winning Ticker:** {best_ticker} (Avg Win: ${ticker_stats.loc[best_ticker, 'Avg_Win']:,.2f})")
-        st.write(f"Latest News: {fetch_dynamic_article(best_ticker + ' stock')}")
-    with rec_col2:
-        st.error(f"⚠️ **Top Losing Ticker:** {worst_ticker} (Avg Loss: ${ticker_stats.loc[worst_ticker, 'Avg_Loss']:,.2f})")
-        st.write(f"Latest News: {fetch_dynamic_article(worst_ticker + ' stock')}")
+    with perf_col_left:
+        st.subheader("🏆 Top 5 Winners")
+        top_5 = ticker_stats.sort_values(by='Net_Profit', ascending=False).head(5)
+        st.table(top_5[['Net_Profit', 'Avg_Win']].style.format("${:,.2f}"))
+        
+        # Add Win Rate Bar Chart for Top 5
+        st.markdown("**Win Rate % (Top 5 Tickers)**")
+        st.bar_chart(top_5['Win_Rate'])
+        
+    with perf_col_right:
+        st.subheader("📉 Bottom 5 Losers")
+        bot_5 = ticker_stats.sort_values(by='Net_Profit', ascending=True).head(5)
+        st.table(bot_5[['Net_Profit', 'Avg_Loss']].style.format("${:,.2f}"))
+        
+        # Add Trade Volume Chart for Bottom 5
+        st.markdown("**Trade Frequency (Bottom 5 Tickers)**")
+        st.bar_chart(bot_5['Total_Count'])
 
     st.markdown("---")
 
-    # DEEP DIVE ANALYTICS
+    # --- DEEP DIVE ANALYTICS ---
     st.markdown(f"### 🔬 Deep Dive: {category_name} Insights")
     
     avg_p_l = total_pnl / len(df_closed) if len(df_closed) > 0 else 0
@@ -167,7 +175,7 @@ def render_dashboard_view(df_subset, category_name):
     with ana_col2:
         st.markdown("**Directional Bias**")
         st.write(f"🐂 **Calls Net:** ${df_closed[df_closed['Is_Call']]['Net Change'].sum():,.2f}")
-        st.write(f"bear **Puts Net:** ${df_closed[df_closed['Is_Put']]['Net Change'].sum():,.2f}")
+        st.write(f"🐻 **Puts Net:** ${df_closed[df_closed['Is_Put']]['Net Change'].sum():,.2f}")
     with ana_col3:
         st.markdown("**Efficiency**")
         dow_stats = df_closed.groupby('Buy DoW')['Net Change'].sum()
@@ -209,39 +217,25 @@ def render_dashboard_view(df_subset, category_name):
 
 # --- STREAMLIT UI ---
 st.set_page_config(page_title="Robinhood Dashboard", layout="wide", page_icon="📈")
-
-# DASHBOARD TITLE
 st.title("📈 Interactive Robinhood P&L Dashboard")
 
-# SIDEBAR INTRO
 st.sidebar.title("📊 Account Insights")
-st.sidebar.info("""
-Analyze your Robinhood options and covered calls history with dynamic performance tracking and deep-dive analytics.
-""")
-
-# Added LinkedIn Link
 st.sidebar.markdown("[🔗 View My LinkedIn Profile](https://www.linkedin.com/in/puneeth-rao-9154b511/)")
-
 st.sidebar.markdown("---")
 
 uploaded_file = st.file_uploader("Upload Robinhood CSV", type=["csv"])
 
 if uploaded_file:
     df_raw = process_robinhood_csv(uploaded_file)
-    
-    # Sidebar Metrics for Open Positions
     open_ops = df_raw[(df_raw['Status'] == 'Open') & (df_raw['Asset Category'].isin(['Option', 'Covered Call']))]
     st.sidebar.metric("Open Position Count", len(open_ops))
     st.sidebar.metric("Open Options Equity", f"${open_ops['Total Buy'].sum():,.2f}")
-    
     st.sidebar.markdown("---")
     st.sidebar.markdown("👨‍💻 **Puneeth Rao**")
 
-    # Main Tabs
     df_final = df_raw[df_raw['Asset Category'].isin(['Option', 'Covered Call'])]
     categories = ["All Data"] + sorted(df_final['Asset Category'].unique().tolist())
     tabs = st.tabs(categories)
     for i, tab in enumerate(tabs):
         with tab:
             render_dashboard_view(df_final if categories[i] == "All Data" else df_final[df_final['Asset Category'] == categories[i]], categories[i])
-            
