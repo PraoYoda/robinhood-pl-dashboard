@@ -8,6 +8,9 @@ import urllib.parse
 import xml.etree.ElementTree as ET
 import calendar 
 
+# Set calendar to start on Sunday
+calendar.setfirstweekday(calendar.SUNDAY)
+
 def clean_amount(val):
     if pd.isna(val) or val == '': return 0.0
     val = str(val).replace('$', '').replace(',', '')
@@ -120,30 +123,27 @@ def process_robinhood_csv(uploaded_file):
         })
 
     df_summary = pd.DataFrame(summary_rows)
-    # --- NEW FILTER: Keep only closed trades ---
-    df_summary = df_summary[df_summary['Status'] == 'Closed'].copy()
-    
-    df_summary['Sort_Date'] = pd.to_datetime(df_summary['Buy Date'], errors='coerce')
-    df_summary = df_summary.sort_values('Sort_Date', ascending=False).drop(columns=['Sort_Date'])
     return df_summary
 
 def render_dashboard_view(df_subset, category_name):
-    if df_subset.empty:
+    # Only show closed trades in the main dashboard view
+    df_closed = df_subset[df_subset['Status'] == 'Closed'].copy()
+    
+    if df_closed.empty:
         st.info(f"No completed trades available for {category_name}.")
         return
 
-    df_subset = df_subset.copy()
-    df_subset['Days Held'] = pd.to_numeric(df_subset['Days Held'], errors='coerce')
-    df_subset['Buy DoW'] = pd.to_datetime(df_subset['Buy Date']).dt.day_name()
-    df_subset['Is_Put'] = df_subset['Contract Description'].str.contains('Put', case=False, na=False)
-    df_subset['Is_Call'] = df_subset['Contract Description'].str.contains('Call', case=False, na=False)
-    df_subset['Trade Style'] = np.where(df_subset['Days Held'] == 0, 'Day Trade', 'Swing Trade')
+    df_closed['Days Held'] = pd.to_numeric(df_closed['Days Held'], errors='coerce')
+    df_closed['Buy DoW'] = pd.to_datetime(df_closed['Buy Date']).dt.day_name()
+    df_closed['Is_Put'] = df_closed['Contract Description'].str.contains('Put', case=False, na=False)
+    df_closed['Is_Call'] = df_closed['Contract Description'].str.contains('Call', case=False, na=False)
+    df_closed['Trade Style'] = np.where(df_closed['Days Held'] == 0, 'Day Trade', 'Swing Trade')
 
-    total_pnl = df_subset['Net Change'].sum()
-    total_trades = len(df_subset)
-    winners, losers = df_subset[df_subset['Net Change'] > 0], df_subset[df_subset['Net Change'] < 0]
+    total_pnl = df_closed['Net Change'].sum()
+    total_trades = len(df_closed)
+    winners, losers = df_closed[df_closed['Net Change'] > 0], df_closed[df_closed['Net Change'] < 0]
     win_rate = (len(winners) / (len(winners) + len(losers))) * 100 if (len(winners) + len(losers)) > 0 else 0
-    total_cost_basis = df_subset['Total Buy'].sum()
+    total_cost_basis = df_closed['Total Buy'].sum()
     overall_roi = (total_pnl / total_cost_basis * 100) if total_cost_basis > 0 else 0
     
     col1, col2, col3, col4 = st.columns(4)
@@ -156,20 +156,20 @@ def render_dashboard_view(df_subset, category_name):
 
     st.markdown(f"### 🔬 Deep Dive: {category_name} Analytics")
     ana_col1, ana_col2, ana_col3 = st.columns(3)
-    dt_df, sw_df = df_subset[df_subset['Trade Style'] == 'Day Trade'], df_subset[df_subset['Trade Style'] == 'Swing Trade']
+    dt_df, sw_df = df_closed[df_closed['Trade Style'] == 'Day Trade'], df_closed[df_closed['Trade Style'] == 'Swing Trade']
     with ana_col1:
         st.markdown("**Trade Style Performance**")
         st.write(f"📈 **Swing Trades:** ${sw_df['Net Change'].sum():,.2f} ({len(sw_df)} trades)")
         st.write(f"⚡ **Day Trades:** ${dt_df['Net Change'].sum():,.2f} ({len(dt_df)} trades)")
 
-    call_pnl = df_subset[df_subset['Is_Call'] == True]['Net Change'].sum()
-    put_pnl = df_subset[df_subset['Is_Put'] == True]['Net Change'].sum()
+    call_pnl = df_closed[df_closed['Is_Call'] == True]['Net Change'].sum()
+    put_pnl = df_closed[df_closed['Is_Put'] == True]['Net Change'].sum()
     with ana_col2:
         st.markdown("**Call vs. Put Focus**")
         st.write(f"🐂 **Calls Net P&L:** ${call_pnl:,.2f}")
         st.write(f"🐻 **Puts Net P&L:** ${put_pnl:,.2f}")
 
-    dow_stats = df_subset.groupby('Buy DoW').agg(Net_Profit=('Net Change', 'sum')).reset_index()
+    dow_stats = df_closed.groupby('Buy DoW').agg(Net_Profit=('Net Change', 'sum')).reset_index()
     if not dow_stats.empty:
         best_day = dow_stats.loc[dow_stats['Net_Profit'].idxmax()]
         worst_day = dow_stats.loc[dow_stats['Net_Profit'].idxmin()]
@@ -188,7 +188,7 @@ def render_dashboard_view(df_subset, category_name):
     
     st.markdown("---")
     st.markdown(f"### 📅 {category_name} - Monthly Calendar")
-    df_temp = df_subset.copy()
+    df_temp = df_closed.copy()
     df_temp['Month_Date'] = pd.to_datetime(df_temp['Sell Date'], errors='coerce').fillna(pd.to_datetime(df_temp['Buy Date'], errors='coerce'))
     valid_dates = df_temp.dropna(subset=['Month_Date']).copy()
     
@@ -213,7 +213,8 @@ def render_dashboard_view(df_subset, category_name):
         month_idx = int(cal_data['Month_Date'].iloc[0].month)
         month_cal = calendar.monthcalendar(year, month_idx)
         
-        cal_df = pd.DataFrame(month_cal, columns=['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'])
+        # Calendar DataFrame now starts with Sun
+        cal_df = pd.DataFrame(month_cal, columns=['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'])
         
         def format_cell(day):
             if day == 0: return ""
@@ -227,10 +228,10 @@ def render_dashboard_view(df_subset, category_name):
             if ":" not in str(val): return ''
             try:
                 pnl_val = float(val.split('$')[1].replace(',', ''))
-                if pnl_val > 0: return 'background-color: #d4edda; color: #155724; font-weight: bold'
-                if pnl_val < 0: return 'background-color: #f8d7da; color: #721c24; font-weight: bold'
+                if pnl_val > 0: return 'background-color: #d4edda; color: #155724; font-weight: bold; text-align: center;'
+                if pnl_val < 0: return 'background-color: #f8d7da; color: #721c24; font-weight: bold; text-align: center;'
             except: pass
-            return ''
+            return 'text-align: center;'
 
         st.table(styled_cal.style.map(color_pnl))
         
@@ -240,17 +241,27 @@ def render_dashboard_view(df_subset, category_name):
 
 # --- STREAMLIT UI ---
 st.set_page_config(page_title="Robinhood P&L Dashboard", layout="wide")
+
 st.sidebar.markdown("👨‍💻 **Created by Puneeth Rao**")
 st.sidebar.markdown("🔗 [Connect with me on LinkedIn](https://www.linkedin.com/in/puneeth-rao/)")
+
 st.title("📈 Interactive Robinhood P&L Dashboard")
 uploaded_file = st.file_uploader("Upload Robinhood CSV", type=["csv"])
 
 if uploaded_file is not None:
     df_result = process_robinhood_csv(uploaded_file)
-    df_result = df_result[df_result['Asset Category'].isin(['Option', 'Covered Call'])]
-    available_categories = sorted(df_result['Asset Category'].unique().tolist())
+    
+    # 1. Sidebar Metric for Open Options Cost Basis
+    open_options = df_result[(df_result['Status'] == 'Open') & (df_result['Asset Category'].isin(['Option', 'Covered Call']))]
+    open_cost_basis = open_options['Total Buy'].sum()
+    st.sidebar.metric("Open Options Cost Basis", f"${open_cost_basis:,.2f}")
+    
+    # Filtering for Dashboard view
+    df_filtered = df_result[df_result['Asset Category'].isin(['Option', 'Covered Call'])]
+    available_categories = sorted(df_filtered['Asset Category'].unique().tolist())
     tab_names = ["All Data"] + available_categories
     tabs = st.tabs(tab_names)
+    
     for i, tab in enumerate(tabs):
         with tab:
-            render_dashboard_view(df_result if tab_names[i] == "All Data" else df_result[df_result['Asset Category'] == tab_names[i]], tab_names[i])
+            render_dashboard_view(df_filtered if tab_names[i] == "All Data" else df_filtered[df_filtered['Asset Category'] == tab_names[i]], tab_names[i])
