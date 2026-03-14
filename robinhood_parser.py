@@ -107,6 +107,7 @@ def render_dashboard_view(df_subset, category_name):
 
     df_closed['Days Held'] = (df_closed['Sell Date'] - df_closed['Buy Date']).dt.days
     df_closed['Is_Call'] = df_closed['Contract Description'].str.contains('Call', case=False, na=False)
+    df_closed['Buy DoW'] = df_closed['Buy Date'].dt.day_name()
     
     total_pnl = df_closed['Net Change'].sum()
     win_rate = (len(df_closed[df_closed['Net Change'] > 0]) / len(df_closed)) * 100
@@ -119,8 +120,8 @@ def render_dashboard_view(df_subset, category_name):
     
     st.markdown("---")
     
-    # --- PERFORMANCE ANALYTICS: TOP/BOTTOM 5 ---
-    st.markdown("### 📊 Performance Analytics")
+    # 1. PERFORMANCE ANALYTICS: TOP/BOTTOM 5
+    st.markdown("### 📊 Performance Analytics: Top & Bottom 5")
     ticker_stats = df_closed.groupby('Ticker').agg(
         Net_Profit=('Net Change', 'sum'),
         Avg_Win=('Net Change', lambda x: x[x > 0].mean() if not x[x > 0].empty else 0),
@@ -137,27 +138,45 @@ def render_dashboard_view(df_subset, category_name):
 
     st.markdown("---")
 
-    # --- DYNAMIC RECOMMENDATIONS & INTEL ---
-    st.markdown("### 💡 Dynamic Options Intelligence")
+    # 2. MARKET INTEL: DYNAMIC OPTIONS INTELLIGENCE
+    st.markdown("### 📡 Market Intel: Dynamic Intelligence")
     top_ticker = ticker_stats['Net_Profit'].idxmax()
     worst_ticker = ticker_stats['Net_Profit'].idxmin()
-    call_pnl = df_closed[df_closed['Is_Call']]['Net Change'].sum()
-    put_pnl = df_closed[~df_closed['Is_Call']]['Net Change'].sum()
 
     rec_col1, rec_col2 = st.columns(2)
     with rec_col1:
-        st.success(f"🔥 **Strength Lead:** {top_ticker}")
-        st.write(f"Latest Intel: {fetch_dynamic_intel(top_ticker)}")
-        bias = "Calls" if call_pnl > put_pnl else "Puts"
-        st.write(f"**Strategy Note:** Your data suggests a profitable bias toward **{bias}**.")
+        st.success(f"🔥 **Leading Asset:** {top_ticker}")
+        st.write(f"Latest News: {fetch_dynamic_intel(top_ticker)}")
     with rec_col2:
-        st.error(f"⚠️ **Efficiency Gap:** {worst_ticker}")
+        st.error(f"⚠️ **Major Drag:** {worst_ticker}")
         st.write(f"Market Context: {fetch_dynamic_intel(worst_ticker)}")
-        st.write(f"**Risk Note:** High frequency of losses in {worst_ticker} may indicate a need to adjust strike selection.")
 
     st.markdown("---")
 
-    # --- MONTHLY CALENDAR ---
+    # 3. DEEP DIVE: STRATEGIC INSIGHTS
+    st.markdown("### 🔬 Deep Dive: Actionable Insights")
+    avg_p_l = total_pnl / len(df_closed)
+    call_pnl = df_closed[df_closed['Is_Call']]['Net Change'].sum()
+    put_pnl = df_closed[~df_closed['Is_Call']]['Net Change'].sum()
+    dow_stats = df_closed.groupby('Buy DoW')['Net Change'].sum()
+
+    ana_col1, ana_col2, ana_col3 = st.columns(3)
+    with ana_col1:
+        st.markdown("**Core Efficiency**")
+        st.write(f"💵 **Avg P/L per Trade:** ${avg_p_l:,.2f}")
+        st.caption("Signifies your 'expected value' for every position opened.")
+    with ana_col2:
+        st.markdown("**Call vs Put Performance**")
+        st.write(f"🐂 **Calls Net:** ${call_pnl:,.2f}")
+        st.write(f"🐻 **Puts Net:** ${put_pnl:,.2f}")
+    with ana_col3:
+        st.markdown("**Entry Timing**")
+        st.write(f"✅ **Best Day:** {dow_stats.idxmax() if not dow_stats.empty else 'N/A'}")
+        st.write(f"❌ **Worst Day:** {dow_stats.idxmin() if not dow_stats.empty else 'N/A'}")
+
+    st.markdown("---")
+
+    # 4. MONTHLY CALENDAR
     st.markdown("### 📅 Monthly P&L Journal")
     df_closed['Month_Str'] = df_closed['Buy Date'].dt.strftime('%B %Y')
     selected_month = st.selectbox("Select Month", df_closed['Month_Str'].unique(), key=f"cal_{category_name}")
@@ -180,6 +199,8 @@ st.title("📈 Interactive Robinhood Options Dashboard")
 
 st.sidebar.title("📊 Account Insights")
 st.sidebar.markdown("[🔗 View My LinkedIn Profile](https://www.linkedin.com/in/puneeth-rao-9154b511/)")
+
+# Global Search Bar
 search_query = st.sidebar.text_input("🔍 Search Ticker or Contract", "").strip().upper()
 st.sidebar.markdown("---")
 
