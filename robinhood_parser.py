@@ -150,15 +150,15 @@ def render_dashboard_view(df_subset, category_name):
             st.write(f"News Insight: {fetch_dynamic_intel(top_t)}")
             st.markdown("**Actionable Strategy:**")
             if call_perf > put_perf:
-                st.write("👉 Your Call options are currently outperforming. This suggests a strong edge in bullish momentum or premium harvesting on uptrends.")
+                st.write("👉 Your Call options are currently outperforming. Focus on bullish delta-neutral or premium harvesting strategies.")
             else:
-                st.write("👉 Puts are providing better relative returns. Consider defensive hedging strategies to preserve capital during volatility.")
+                st.write("👉 Put performance is stronger. Consider capital preservation through defensive positioning.")
         
         with intel_col2:
             st.error(f"⚠️ **Efficiency Gap:** {worst_t}")
             st.write(f"News Insight: {fetch_dynamic_intel(worst_t)}")
             st.markdown("**Risk Adjustment:**")
-            st.write(f"👉 Review strikes for {worst_t}. Data suggests your risk/reward ratio is skewed here; consider tightening exits or avoiding high IV events for this ticker.")
+            st.write(f"👉 Efficiency issue in {worst_t}. Review your entry criteria to avoid low-probability setups.")
 
         st.markdown("---")
 
@@ -212,14 +212,12 @@ def render_dashboard_view(df_subset, category_name):
 st.set_page_config(page_title="Robinhood Dashboard", layout="wide", page_icon="📈")
 st.title("📈 Interactive Robinhood Options Dashboard")
 
-# --- SIDEBAR: NEW DESCRIPTION ---
-st.sidebar.markdown("👨‍💻 **Puneeth Rao**")
-st.sidebar.markdown("[🔗 LinkedIn Profile](https://www.linkedin.com/in/puneeth-rao-9154b511/)")
-st.sidebar.markdown("---")
+# --- SIDEBAR: TOP ---
 st.sidebar.subheader("🎯 Trade Edge Intelligence")
 st.sidebar.info("""
-    **Transforming raw data into actionable trade alpha.** This dashboard provides a high-fidelity view of your options and covered call performance, uncovering your behavioral edge and directional bias to refine your path toward consistent income.
+    **Transforming raw data into actionable trade alpha.** This dashboard analyzes your behavioral edge and directional bias to refine your path toward consistent income.
 """)
+st.sidebar.markdown("---")
 
 search_query = st.sidebar.text_input("🔍 Search Ticker or Contract", "").strip().upper()
 st.sidebar.markdown("---")
@@ -228,14 +226,34 @@ uploaded_file = st.file_uploader("Upload Robinhood CSV", type=["csv"])
 
 if uploaded_file:
     df_raw = process_robinhood_csv(uploaded_file)
-    df_raw = df_raw[df_raw['Asset Category'] != 'Other'] # Kill Stocks
+    df_raw = df_raw[df_raw['Asset Category'] != 'Other']
     
     if search_query:
         df_raw = df_raw[df_raw['Ticker'].str.contains(search_query, na=False) | 
                         df_raw['Contract Description'].str.contains(search_query, na=False)]
     
     st.sidebar.metric("Open Positions", len(df_raw[df_raw['Status'] == 'Open']))
+    
+    # --- SIDEBAR: TRADE CONFIDENCE ---
+    st.sidebar.markdown("### ⚡ Trade Confidence")
+    df_c = df_raw[df_raw['Status'] == 'Closed'].copy()
+    if not df_c.empty:
+        df_c['Days Held'] = (df_c['Sell Date'] - df_c['Buy Date']).dt.days
+        day_t = df_c[df_c['Days Held'] == 0]
+        swing_t = df_c[df_c['Days Held'] > 0]
+        
+        day_wr = (len(day_t[day_t['Net Change'] > 0]) / len(day_t) * 100) if not day_t.empty else 0
+        swing_wr = (len(swing_t[swing_t['Net Change'] > 0]) / len(swing_t) * 100) if not swing_t.empty else 0
+        
+        st.sidebar.write(f"**Day Trade Win Rate:** {day_wr:.1f}%")
+        st.sidebar.write(f"**Swing Trade Win Rate:** {swing_wr:.1f}%")
 
+st.sidebar.markdown("---")
+# --- SIDEBAR: BOTTOM SIGNATURE ---
+st.sidebar.markdown("👨‍💻 **Puneeth Rao**")
+st.sidebar.markdown("[🔗 LinkedIn Profile](https://www.linkedin.com/in/puneeth-rao-9154b511/)")
+
+if uploaded_file:
     t1, t2, t3 = st.tabs(["All Portfolio", "Options Only", "Covered Calls Only"])
     with t1: render_dashboard_view(df_raw, "Portfolio")
     with t2: render_dashboard_view(df_raw[df_raw['Asset Category'] == 'Option'], "Options")
