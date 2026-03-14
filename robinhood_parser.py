@@ -112,4 +112,139 @@ def render_dashboard_view(df_subset, category_name):
     # Calculate Top-Level KPIs
     total_pnl = df_subset['Net Change'].sum()
     total_trades = len(df_subset)
-    winning_trades = len(df_subset[df_subset['Net Change'] > 0
+    winning_trades = len(df_subset[df_subset['Net Change'] > 0])
+    losing_trades = len(df_subset[df_subset['Net Change'] < 0])
+    win_rate = (winning_trades / (winning_trades + losing_trades)) * 100 if (winning_trades + losing_trades) > 0 else 0
+    
+    # --- KPI ROW ---
+    col1, col2, col3, col4 = st.columns(4)
+    col1.metric("Total Net Profit/Loss", f"${total_pnl:,.2f}")
+    col2.metric("Win Rate", f"{win_rate:.1f}%")
+    col3.metric("Trades with Profit", winning_trades)
+    col4.metric("Total Trades", total_trades)
+    
+    st.markdown("---")
+    
+    # --- MONTHLY SUMMARY ---
+    st.markdown(f"### {category_name} - Monthly Summary")
+    df_temp = df_subset.copy()
+    df_temp['Sell_DT'] = pd.to_datetime(df_temp['Sell Date'], errors='coerce')
+    df_temp['Buy_DT'] = pd.to_datetime(df_temp['Buy Date'], errors='coerce')
+    df_temp['Month_Date'] = df_temp['Sell_DT'].fillna(df_temp['Buy_DT'])
+    
+    # Filter rows that have a valid date
+    valid_dates = df_temp.dropna(subset=['Month_Date']).copy()
+    
+    if not valid_dates.empty:
+        valid_dates['Month'] = valid_dates['Month_Date'].dt.strftime('%B %Y')
+        valid_dates['Month_Sort'] = valid_dates['Month_Date'].dt.to_period('M')
+        
+        valid_dates['Is_Put'] = valid_dates['Contract Description'].str.contains('Put', case=False, na=False)
+        valid_dates['Is_Call'] = valid_dates['Contract Description'].str.contains('Call', case=False, na=False)
+        
+        monthly_summary = valid_dates.groupby(['Month_Sort', 'Month']).agg(
+            Total_Trades=('Ticker', 'count'),
+            Wins=('Net Change', lambda x: (x > 0).sum()),
+            Losses=('Net Change', lambda x: (x < 0).sum()),
+            Net_Profit=('Net Change', 'sum'),
+            Unique_Tickers=('Ticker', 'nunique'),
+            Puts=('Is_Put', 'sum'),
+            Calls=('Is_Call', 'sum')
+        ).reset_index().sort_values('Month_Sort')
+        
+        monthly_summary = monthly_summary.drop(columns=['Month_Sort'])
+        monthly_summary.rename(columns={
+            'Wins': 'Trades with Profit', 
+            'Losses': 'Trades with Loss', 
+            'Net_Profit': 'Total Net Profit/Loss',
+            'Unique_Tickers': 'Unique Tickers',
+            'Puts': 'No of PUTS',
+            'Calls': 'No of CALLS'
+        }, inplace=True)
+        
+        st.dataframe(monthly_summary.style.format({'Total Net Profit/Loss': '${:,.2f}'}), width='stretch')
+        
+        # --- CHARTS ---
+        col_chart1, col_chart2 = st.columns(2)
+        with col_chart1:
+            st.markdown("#### P&L By Month")
+            chart_data = monthly_summary[['Month', 'Total Net Profit/Loss']].set_index('Month')
+            st.bar_chart(chart_data)
+            
+        with col_chart2:
+            if category_name == "All Data":
+                st.markdown("#### Trades by Category")
+                cat_counts = df_subset['Asset Category'].value_counts()
+                st.bar_chart(cat_counts)
+            else:
+                st.markdown("#### Win vs Loss Ratio")
+                wl_data = pd.DataFrame({'Count': [winning_trades, losing_trades]}, index=['Wins', 'Losses'])
+                st.bar_chart(wl_data)
+    else:
+        st.info("Not enough dated transactions to generate monthly tracking.")
+
+    st.markdown("---")
+    
+    # --- DATA TABLE ---
+    st.markdown(f"### {category_name} - Trade Details")
+    display_df = df_temp.drop(columns=['Sell_DT', 'Buy_DT', 'Month_Date', 'Month', 'Month_Sort', 'Is_Put', 'Is_Call'], errors='ignore')
+    st.dataframe(display_df, width='stretch')
+
+
+# --- STREAMLIT UI ---
+st.set_page_config(page_title="Robinhood P&L Dashboard", layout="wide")
+
+# --- SIDEBAR: AUTHOR INFO ---
+st.sidebar.markdown("## About the Creator")
+st.sidebar.markdown("This tool was built to automate Robinhood options and stock P&L tracking, specifically optimized for covered calls and monthly tracking.")
+st.sidebar.markdown("---")
+st.sidebar.markdown("👨‍💻 **Created by Puneeth Rao**")
+st.sidebar.markdown("🔗 [Connect with me on LinkedIn](https://www.linkedin.com/in/puneeth-rao/)")
+
+# --- MAIN DASHBOARD ---
+st.title("📈 Interactive Robinhood P&L Dashboard")
+st.write("Upload your raw Robinhood statement CSV to generate your dynamic trading tracker.")
+
+uploaded_file = st.file_uploader("Upload Robinhood CSV", type=["csv"])
+
+if uploaded_file is not None:
+    with st.spinner("Processing your trades..."):
+        try:
+            # Process the file
+            df_result = process_robinhood_csv(uploaded_file)
+            df_result['Net Change'] = pd.to_numeric(df_result['Net Change'], errors='coerce').fillna(0)
+            
+            # Determine available categories
+            available_categories = sorted(df_result['Asset Category'].unique().tolist())
+            tab_names = ["All Data"] + available_categories
+            
+            # Create Tabs
+            tabs = st.tabs(tab_names)
+            
+            # Populate Tabs
+            for i, tab in enumerate(tabs):
+                with tab:
+                    if tab_names[i] == "All Data":
+                        render_dashboard_view(df_result, "All Data")
+                    else:
+                        cat = tab_names[i]
+                        render_dashboard_view(df_result[df_result['Asset Category'] == cat].copy(), cat)
+            
+            st.markdown("---")
+            
+            # --- GLOBAL DOWNLOAD BUTTON ---
+            st.markdown("### Export Full Report")
+            buffer = io.BytesIO()
+            with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
+                # We export the full dataset regardless of what tab is open
+                df_result.to_excel(writer, index=False, sheet_name='P&L Summary')
+            
+            st.download_button(
+                label="📥 Download Raw Processed Excel File (All Categories)",
+                data=buffer.getvalue(),
+                file_name="Robinhood_PL_Summary.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            )
+            
+        except Exception as e:
+            st.error(f"An error occurred while processing the file: {e}")
