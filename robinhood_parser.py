@@ -41,7 +41,7 @@ def get_core_desc(row):
         if match: return match.group(1).strip()
     return desc.strip()
 
-@st.cache_data(ttl=3600)  # Caches the result for 1 hour so the app stays lightning fast
+@st.cache_data(ttl=3600)
 def fetch_dynamic_article(query):
     """Fetches the #1 trending article from Google News based on the specific trading gap."""
     try:
@@ -54,12 +54,10 @@ def fetch_dynamic_article(query):
         if item is not None:
             title = item.find('title').text
             link = item.find('link').text
-            # Clean up the title a bit by removing the publisher name at the end if it exists
             clean_title = title.split(' - ')[0] 
             return f"[{clean_title}]({link})"
     except Exception as e:
         pass
-    # Fallback to a dynamic Google Search if the RSS feed times out
     return f"[Click here to search trending articles for '{query}'](https://www.google.com/search?q={urllib.parse.quote(query)})"
 
 def process_robinhood_csv(uploaded_file):
@@ -220,7 +218,6 @@ def render_dashboard_view(df_subset, category_name):
     else:
         col_b3.metric("🎯 Most Reliable Ticker", "Need more data", "Min 3 trades required", delta_color="off")
 
-    # --- ACTIONABLE RECOMMENDATIONS WITH DYNAMIC TRENDING LINKS ---
     st.markdown("### 🛠️ Actionable Recommendations & Learning")
     
     recommendations = []
@@ -323,13 +320,29 @@ def render_dashboard_view(df_subset, category_name):
 st.set_page_config(page_title="Robinhood P&L Dashboard", layout="wide")
 
 st.sidebar.markdown("## About the Creator")
-st.sidebar.markdown("This tool was built to automate Robinhood options and stock P&L tracking, specifically optimized for covered calls and monthly tracking.")
+# --- UPDATED TEXT HERE ---
+st.sidebar.markdown("This tool was built to automate Robinhood options and stock P&L tracking, specifically optimized for options trading.")
 st.sidebar.markdown("---")
 st.sidebar.markdown("👨‍💻 **Created by Puneeth Rao**")
 st.sidebar.markdown("🔗 [Connect with me on LinkedIn](https://www.linkedin.com/in/puneeth-rao/)")
 
 st.title("📈 Interactive Robinhood P&L Dashboard")
 st.write("Upload your raw Robinhood statement CSV to generate your dynamic trading tracker.")
+
+with st.expander("ℹ️ How to get your Robinhood CSV"):
+    st.markdown("""
+    **From a Web Browser (Recommended):**
+    1. Log in to your [Robinhood Account](https://robinhood.com).
+    2. Go directly to your [Reports and Statements page](https://robinhood.com/account/reports) (or click **Account** > **Reports and Statements**).
+    3. Under **Account History**, click **Export as CSV**.
+    
+    **From the Mobile App ([iOS](https://apps.apple.com/us/app/robinhood-investing-for-all/id938003185) / [Android](https://play.google.com/store/apps/details?id=com.robinhood.android)):**
+    1. Tap your **Profile** icon in the bottom right corner.
+    2. Tap the **Menu** (three lines) in the top left corner.
+    3. Tap **Investing**.
+    4. Scroll down and tap **Reports and statements**.
+    5. Tap **Account History** and export the file.
+    """)
 
 uploaded_file = st.file_uploader("Upload Robinhood CSV", type=["csv"])
 
