@@ -52,7 +52,7 @@ def get_core_desc(row):
 @st.cache_data(ttl=3600)
 def fetch_dynamic_intel(ticker):
     try:
-        url = f"https://news.google.com/rss/search?q={urllib.parse.quote(ticker + ' options market')}"
+        url = f"https://news.google.com/rss/search?q={urllib.parse.quote(ticker + ' stock options analysis')}"
         req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
         with urllib.request.urlopen(req, timeout=3) as response:
             xml_data = response.read()
@@ -123,7 +123,8 @@ def render_dashboard_view(df_subset, category_name):
         ticker_stats = df_closed.groupby('Ticker').agg(
             Net_Profit=('Net Change', 'sum'),
             Avg_Win=('Net Change', lambda x: x[x > 0].mean() if not x[x > 0].empty else 0),
-            Avg_Loss=('Net Change', lambda x: x[x < 0].mean() if not x[x < 0].empty else 0)
+            Avg_Loss=('Net Change', lambda x: x[x < 0].mean() if not x[x < 0].empty else 0),
+            Win_Count=('Net Change', lambda x: (x > 0).sum())
         ).fillna(0)
 
         p_col1, p_col2 = st.columns(2)
@@ -136,7 +137,37 @@ def render_dashboard_view(df_subset, category_name):
 
         st.markdown("---")
 
-        # 2. DEEP DIVE
+        # 2. ENHANCED MARKET INTELLIGENCE & RECOMMENDATIONS
+        st.markdown("### 📡 Market Intelligence & Strategy")
+        
+        top_t = ticker_stats['Net_Profit'].idxmax()
+        worst_t = ticker_stats['Net_Profit'].idxmin()
+        call_perf = df_closed[df_closed['Is_Call']]['Net Change'].sum()
+        put_perf = df_closed[~df_closed['Is_Call']]['Net Change'].sum()
+        
+        intel_col1, intel_col2 = st.columns(2)
+        with intel_col1:
+            st.success(f"🔥 **Strength Lead:** {top_t}")
+            st.write(f"News Insight: {fetch_dynamic_intel(top_t)}")
+            st.markdown("**Actionable Strategy:**")
+            if call_perf > put_perf:
+                st.write("👉 Your Call options are significantly outperforming Puts. Consider leaning into bullish spreads or long calls on high-momentum tickers.")
+            else:
+                st.write("👉 Your Put options are currently more profitable. Defensive hedging or bearish spreads may be your current edge.")
+        
+        with intel_col2:
+            st.error(f"⚠️ **Efficiency Gap:** {worst_t}")
+            st.write(f"News Insight: {fetch_dynamic_intel(worst_t)}")
+            st.markdown("**Risk Adjustment:**")
+            avg_loss = ticker_stats.loc[worst_t, 'Avg_Loss']
+            if abs(avg_loss) > ticker_stats['Avg_Win'].mean() * 2:
+                st.write(f"👉 **Warning:** Losses in {worst_t} are outsized. Implement a hard stop-loss at 50% of premium for this ticker.")
+            else:
+                st.write(f"👉 Consistency issue detected. Review your strike selection on {worst_t} to ensure you aren't selling too close to the money.")
+
+        st.markdown("---")
+
+        # 3. DEEP DIVE
         st.markdown(f"### 🔬 Deep Dive: {category_name} Intelligence")
         ana_col1, ana_col2, ana_col3 = st.columns(3)
         with ana_col1:
@@ -145,20 +176,13 @@ def render_dashboard_view(df_subset, category_name):
             st.write(f"⚡ **Day Net:** ${df_closed[df_closed['Trade Style'] == 'Day Trade']['Net Change'].sum():,.2f}")
         with ana_col2:
             st.markdown("**Directional Bias**")
-            st.write(f"🐂 **Calls Net:** ${df_closed[df_closed['Is_Call']]['Net Change'].sum():,.2f}")
-            st.write(f"🐻 **Puts Net:** ${df_closed[~df_closed['Is_Call']]['Net Change'].sum():,.2f}")
+            st.write(f"🐂 **Calls Net:** ${call_perf:,.2f}")
+            st.write(f"🐻 **Puts Net:** ${put_perf:,.2f}")
         with ana_col3:
             st.markdown("**Timing & Efficiency**")
             dow = df_closed.groupby('Buy DoW')['Net Change'].sum()
             st.write(f"✅ **Best Day:** {dow.idxmax() if not dow.empty else 'N/A'}")
             st.write(f"⏱️ **Avg Days Held:** {df_closed['Days Held'].mean():.1f} Days")
-
-        st.markdown("---")
-
-        # 3. DYNAMIC INTEL
-        st.markdown("### 📡 Market Intelligence")
-        top_t = ticker_stats['Net_Profit'].idxmax()
-        st.success(f"🔥 **Leading Asset:** {top_t} | Latest News: {fetch_dynamic_intel(top_t)}")
 
         st.markdown("---")
 
@@ -178,7 +202,7 @@ def render_dashboard_view(df_subset, category_name):
             return f"background-color: {'#d4edda' if amt > 0 else '#f8d7da'}; font-weight: bold; text-align: center;"
         st.table(styled_cal.style.map(color_pnl))
 
-    # --- 5. TRADE LOG (MOVED TO BOTTOM OF EACH VIEW) ---
+    # --- 5. TRADE LOG (BOTTOM ANCHORED) ---
     st.markdown("---")
     st.subheader(f"📋 {category_name} Trade Log")
     csv = df_subset.to_csv(index=False).encode('utf-8')
@@ -203,17 +227,16 @@ uploaded_file = st.file_uploader("Upload Robinhood CSV", type=["csv"])
 
 if uploaded_file:
     df_raw = process_robinhood_csv(uploaded_file)
-    df_raw = df_raw[df_raw['Asset Category'] != 'Other'] # Kill Stock rows
+    df_raw = df_raw[df_raw['Asset Category'] != 'Other'] # Filters out Stocks
     
     if search_query:
-        df_raw = df_raw[df_raw['Ticker'].str.contains(search_query, na=False) | df_raw['Contract Description'].str.contains(search_query, na=False)]
+        df_raw = df_raw[df_raw['Ticker'].str.contains(search_query, na=False) | 
+                        df_raw['Contract Description'].str.contains(search_query, na=False)]
     
     st.sidebar.metric("Open Positions", len(df_raw[df_raw['Status'] == 'Open']))
     st.sidebar.markdown("👨‍💻 **Puneeth Rao**")
 
-    # TABS FOR CATEGORY FILTERING ONLY
     t1, t2, t3 = st.tabs(["All Data", "Options Only", "Covered Calls Only"])
-    
-    with t1: render_dashboard_view(df_raw, "All Portfolio")
+    with t1: render_dashboard_view(df_raw, "Portfolio")
     with t2: render_dashboard_view(df_raw[df_raw['Asset Category'] == 'Option'], "Options")
     with t3: render_dashboard_view(df_raw[df_raw['Asset Category'] == 'Covered Call'], "Covered Calls")
