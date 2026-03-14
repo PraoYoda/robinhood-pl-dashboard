@@ -11,7 +11,8 @@ import calendar
 # Set calendar to start on Sunday
 calendar.setfirstweekday(calendar.SUNDAY)
 
-# --- CSS FOR SYMMETRY ---
+# --- CSS FOR SYMMETRY AND STYLE ---
+# Fixed the parameter from unsafe_allow_stdio to unsafe_allow_html
 st.markdown("""
     <style>
     .stTable {
@@ -20,15 +21,17 @@ st.markdown("""
     th {
         text-align: center !important;
         background-color: #f0f2f6;
+        font-weight: bold;
     }
     td {
         text-align: center !important;
-        width: 14.28%; /* Perfectly symmetrical 7-column grid */
-        height: 60px;
+        width: 14.28%; /* Symmetrical 7-column grid */
+        height: 70px;
         vertical-align: middle !important;
+        font-size: 14px;
     }
     </style>
-    """, unsafe_allow_stdio=True)
+    """, unsafe_allow_html=True)
 
 def clean_amount(val):
     if pd.isna(val) or val == '': return 0.0
@@ -101,31 +104,20 @@ def process_robinhood_csv(uploaded_file):
         
         total_buy_qty = buys['Quantity_Clean'].sum()
         total_buy_amt = abs(buys[buys['Amount_Clean'] < 0]['Amount_Clean'].sum())
-        total_sell_qty = sells['Quantity_Clean'].sum()
         total_sell_amt = sells[sells['Amount_Clean'] > 0]['Amount_Clean'].sum()
         
         net_change = group['Amount_Clean'].sum()
-        avg_buy = total_buy_amt / total_buy_qty if total_buy_qty > 0 else 0
-        avg_sell = total_sell_amt / total_sell_qty if total_sell_qty > 0 else 0
-        
         buy_date = buys['Activity Date'].min() if not buys.empty else np.nan
         sell_date = sells['Activity Date'].max() if not sells.empty else np.nan
-        
         status = 'Closed' if pd.notna(buy_date) and pd.notna(sell_date) else 'Open'
 
         summary_rows.append({
             'Ticker': ticker,
             'Contract Description': core_desc,
-            '# Cons/Shares': total_buy_qty if total_buy_qty > 0 else total_sell_qty,
-            'Avg Buy': round(avg_buy, 2),
             'Total Buy': round(total_buy_amt, 2),
-            'Avg Sell': round(avg_sell, 2),
-            'Total Sell': round(total_sell_amt, 2),
-            '% Change': round((net_change / total_buy_amt), 4) if total_buy_amt > 0 else 0.0,
             'Net Change': round(net_change, 2),
             'Buy Date': buy_date,
             'Sell Date': sell_date,
-            'Let Exp?': 'Yes' if any(group['Trans Code'] == 'OEXP') else 'No',
             'Asset Category': group['Asset Type'].iloc[0],
             'Status': status
         })
@@ -133,45 +125,38 @@ def process_robinhood_csv(uploaded_file):
     return pd.DataFrame(summary_rows)
 
 def render_dashboard_view(df_subset, category_name):
-    # Filter for closed trades for metrics and calendar
     df_closed = df_subset[df_subset['Status'] == 'Closed'].copy()
-    
     if df_closed.empty:
         st.info(f"No completed trades available for {category_name}.")
         return
 
-    df_closed['Days Held'] = (df_closed['Sell Date'] - df_closed['Buy Date']).dt.days
-    df_closed['Buy DoW'] = df_closed['Buy Date'].dt.day_name()
-    df_closed['Is_Put'] = df_closed['Contract Description'].str.contains('Put', case=False, na=False)
-    df_closed['Is_Call'] = df_closed['Contract Description'].str.contains('Call', case=False, na=False)
-    df_closed['Trade Style'] = np.where(df_closed['Days Held'] == 0, 'Day Trade', 'Swing Trade')
-
-    # Metric Row
+    # Metrics
     total_pnl = df_closed['Net Change'].sum()
-    win_rate = (len(df_closed[df_closed['Net Change'] > 0]) / len(df_closed)) * 100
     total_cost = df_closed['Total Buy'].sum()
     roi = (total_pnl / total_cost * 100) if total_cost > 0 else 0
     
-    col1, col2, col3, col4 = st.columns(4)
-    col1.metric("Realized P&L", f"${total_pnl:,.2f}")
-    col2.metric("Win Rate", f"{win_rate:.1f}%")
-    col3.metric("Avg ROI", f"{roi:.1f}%")
-    col4.metric("Trades", len(df_closed))
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Realized P&L", f"${total_pnl:,.2f}")
+    c2.metric("Avg ROI", f"{roi:.1f}%")
+    c3.metric("Closed Trades", len(df_closed))
     
     st.markdown("---")
 
-    # Calendar View with Sunday Start and Chromatic Sort
+    # Calendar with Sunday start and chronological Month sort
     st.markdown(f"### 📅 {category_name} - Monthly Journal")
+    
+    # Sorting logic to ensure Jan, Feb, March... order
     df_closed['Month_Sort'] = df_closed['Buy Date'].dt.to_period('M')
     df_closed['Month_Str'] = df_closed['Buy Date'].dt.strftime('%B %Y')
     
-    # Sort by the period index to ensure Jan, Feb, March order
-    monthly_options = df_closed.sort_values('Month_Sort')['Month_Str'].unique().tolist()
-    selected_month = st.selectbox("Select Month", monthly_options, key=f"cal_{category_name}")
+    # Sort by the Period index to maintain chronological order
+    month_options = df_closed.sort_values('Month_Sort')['Month_Str'].unique().tolist()
+    selected_month = st.selectbox("Select Month", month_options, key=f"cal_{category_name}")
     
     cal_data = df_closed[df_closed['Month_Str'] == selected_month].copy()
     daily_pnl = cal_data.groupby(cal_data['Buy Date'].dt.day)['Net Change'].sum().to_dict()
     
+    # Generate Calendar
     year, month_idx = cal_data['Buy Date'].iloc[0].year, cal_data['Buy Date'].iloc[0].month
     matrix = calendar.monthcalendar(int(year), int(month_idx))
     cal_df = pd.DataFrame(matrix, columns=['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'])
@@ -195,20 +180,24 @@ def render_dashboard_view(df_subset, category_name):
     st.table(styled_cal.style.map(color_pnl))
     
     st.markdown("---")
-    st.markdown(f"### 📋 {category_name} - Trade Log")
-    # Clean up dates for display
+    st.markdown(f"### 📋 Trade Details")
     display_df = df_subset.copy()
     display_df['Buy Date'] = display_df['Buy Date'].dt.strftime('%m/%d/%Y')
     display_df['Sell Date'] = display_df['Sell Date'].dt.strftime('%m/%d/%Y').replace('NaT', 'OPEN')
     st.dataframe(display_df.drop(columns=['Month_Sort', 'Month_Str'], errors='ignore'), use_container_width=True)
 
-# --- APP LAYOUT ---
-st.set_page_config(page_title="Robinhood Portfolio", layout="wide")
+# --- STREAMLIT UI ---
+st.set_page_config(page_title="Robinhood Portfolio Dashboard", layout="wide")
 
-# Sidebar Intro
-st.sidebar.title("📈 Trade Intel")
-st.sidebar.info("""
-**Robinhood P&L Dashboard** This tool summarizes your account history, focusing on realized gains from options and covered calls.
+# 4. Sidebar Intro
+st.sidebar.title("📊 Account Insights")
+st.sidebar.markdown("""
+Welcome to your **Interactive P&L Dashboard**. 
+
+This application parses your Robinhood CSV data to track:
+* **Realized Gains/Losses** from closed trades.
+* **Open Equity** currently at risk in the market.
+* **Monthly Performance** via a trading journal view.
 """)
 
 st.sidebar.markdown("---")
@@ -218,20 +207,21 @@ uploaded_file = st.file_uploader("Upload Robinhood CSV", type=["csv"])
 if uploaded_file:
     df_raw = process_robinhood_csv(uploaded_file)
     
-    # 1. Sidebar Metrics for Open Positions
+    # 1. Sidebar Metrics for Open Positions (Options only)
     open_ops = df_raw[(df_raw['Status'] == 'Open') & (df_raw['Asset Category'].isin(['Option', 'Covered Call']))]
-    st.sidebar.metric("Open Option Count", len(open_ops))
+    st.sidebar.metric("Open Position Count", len(open_ops))
     st.sidebar.metric("Open Options Equity", f"${open_ops['Total Buy'].sum():,.2f}")
     
     st.sidebar.markdown("---")
     st.sidebar.markdown("👨‍💻 **Puneeth Rao**")
-    
+
     # Dashboard Tabs
-    df_options = df_raw[df_raw['Asset Category'].isin(['Option', 'Covered Call'])]
-    available_cats = ["All Data"] + sorted(df_options['Asset Category'].unique().tolist())
-    tabs = st.tabs(available_cats)
+    df_final = df_raw[df_raw['Asset Category'].isin(['Option', 'Covered Call'])]
+    categories = ["All Data"] + sorted(df_final['Asset Category'].unique().tolist())
+    tabs = st.tabs(categories)
     
     for i, tab in enumerate(tabs):
         with tab:
-            cat = available_cats[i]
-            render_dashboard_view(df_options if cat == "All Data" else df_options[df_options['Asset Category'] == cat], cat)
+            cat = categories[i]
+            data = df_final if cat == "All Data" else df_final[df_final['Asset Category'] == cat]
+            render_dashboard_view(data, cat)
