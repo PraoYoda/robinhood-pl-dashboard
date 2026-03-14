@@ -123,8 +123,7 @@ def render_dashboard_view(df_subset, category_name):
         ticker_stats = df_closed.groupby('Ticker').agg(
             Net_Profit=('Net Change', 'sum'),
             Avg_Win=('Net Change', lambda x: x[x > 0].mean() if not x[x > 0].empty else 0),
-            Avg_Loss=('Net Change', lambda x: x[x < 0].mean() if not x[x < 0].empty else 0),
-            Win_Count=('Net Change', lambda x: (x > 0).sum())
+            Avg_Loss=('Net Change', lambda x: x[x < 0].mean() if not x[x < 0].empty else 0)
         ).fillna(0)
 
         p_col1, p_col2 = st.columns(2)
@@ -151,19 +150,15 @@ def render_dashboard_view(df_subset, category_name):
             st.write(f"News Insight: {fetch_dynamic_intel(top_t)}")
             st.markdown("**Actionable Strategy:**")
             if call_perf > put_perf:
-                st.write("👉 Your Call options are significantly outperforming Puts. Consider leaning into bullish spreads or long calls on high-momentum tickers.")
+                st.write("👉 Your Call options are outperforming. Consider focused long calls or debit spreads on top performers.")
             else:
-                st.write("👉 Your Put options are currently more profitable. Defensive hedging or bearish spreads may be your current edge.")
+                st.write("👉 Your Puts show higher efficiency. Consider bearish hedges or capital preservation strategies.")
         
         with intel_col2:
             st.error(f"⚠️ **Efficiency Gap:** {worst_t}")
             st.write(f"News Insight: {fetch_dynamic_intel(worst_t)}")
             st.markdown("**Risk Adjustment:**")
-            avg_loss = ticker_stats.loc[worst_t, 'Avg_Loss']
-            if abs(avg_loss) > ticker_stats['Avg_Win'].mean() * 2:
-                st.write(f"👉 **Warning:** Losses in {worst_t} are outsized. Implement a hard stop-loss at 50% of premium for this ticker.")
-            else:
-                st.write(f"👉 Consistency issue detected. Review your strike selection on {worst_t} to ensure you aren't selling too close to the money.")
+            st.write(f"👉 Review strikes for {worst_t}. If losses persist, tighten stops to 40% of premium collected.")
 
         st.markdown("---")
 
@@ -217,7 +212,9 @@ def render_dashboard_view(df_subset, category_name):
 st.set_page_config(page_title="Robinhood Dashboard", layout="wide", page_icon="📈")
 st.title("📈 Interactive Robinhood Options Dashboard")
 
+# --- SIDEBAR: REORDERED NAME & LINK ---
 st.sidebar.title("📊 Account Insights")
+st.sidebar.markdown("👨‍💻 **Puneeth Rao**")
 st.sidebar.markdown("[🔗 LinkedIn Profile](https://www.linkedin.com/in/puneeth-rao-9154b511/)")
 
 search_query = st.sidebar.text_input("🔍 Search Ticker or Contract", "").strip().upper()
@@ -234,7 +231,6 @@ if uploaded_file:
                         df_raw['Contract Description'].str.contains(search_query, na=False)]
     
     st.sidebar.metric("Open Positions", len(df_raw[df_raw['Status'] == 'Open']))
-    st.sidebar.markdown("👨‍💻 **Puneeth Rao**")
 
     t1, t2, t3 = st.tabs(["All Data", "Options Only", "Covered Calls Only"])
     with t1: render_dashboard_view(df_raw, "Portfolio")
