@@ -7,7 +7,7 @@ import urllib.request
 import urllib.parse
 import xml.etree.ElementTree as ET
 
-# --- CORE UTILITIES ---
+# --- 1. CORE UTILITIES & PARSING ---
 def clean_amount(val):
     if pd.isna(val) or val == '': return 0.0
     val = str(val).replace('$', '').replace(',', '')
@@ -81,112 +81,105 @@ def process_robinhood_csv(uploaded_file):
             'Status': status,
             'Asset Category': group['Asset Category'].iloc[0],
             'Strategy': get_strategy(group.iloc[0]),
-            'Close Date': sell_date
+            'Close Date': sell_date,
+            'Buy Date': buy_date
         })
     return pd.DataFrame(summary_rows)
 
-# --- UI LAYOUT ---
-st.set_page_config(page_title="Robinhood Elite Dashboard", layout="wide")
+# --- 2. DASHBOARD UI LOGIC ---
+st.set_page_config(page_title="Robinhood Mastery Dashboard", layout="wide")
 
-# Sidebar
 st.sidebar.title("🛠️ Trader's Toolkit")
-st.sidebar.markdown("👨‍💻 **Puneeth Rao** | [LinkedIn](https://www.linkedin.com/in/puneeth-rao/)")
-st.sidebar.info("Optimized for Options Mastery")
+st.sidebar.markdown("👨‍💻 **Created by Puneeth Rao**")
+st.sidebar.markdown("🔗 [Connect with me on LinkedIn](https://www.linkedin.com/in/puneeth-rao/)")
+st.sidebar.info("Optimized for Options Trading & Behavioral Performance")
 
-# Main
 st.title("📈 Robinhood Options Mastery Dashboard")
 
-uploaded_file = st.file_uploader("Upload Your Robinhood Account History CSV", type=["csv"])
+with st.expander("ℹ️ How to get your Robinhood CSV"):
+    st.markdown("""
+    1. Log in to [Robinhood Reports](https://robinhood.com/account/reports).
+    2. Under **Account History**, click **Export as CSV**.
+    """)
+
+uploaded_file = st.file_uploader("Upload Your Robinhood CSV", type=["csv"])
 
 if uploaded_file:
-    df_res = process_robinhood_csv(uploaded_file)
-    df_res = df_res[df_res['Status'] == 'Closed']
-    df_res = df_res[df_res['Asset Category'].isin(['Option', 'Covered Call'])]
-    df_res = df_res.sort_values('Close Date')
+    df_raw = process_robinhood_csv(uploaded_file)
+    # Filter for realized options/covered calls
+    df_res = df_raw[(df_raw['Status'] == 'Closed') & (df_raw['Asset Category'].isin(['Option', 'Covered Call']))].sort_values('Close Date')
 
-    # Top Metrics
-    total_pnl = df_res['Net Change'].sum()
-    tax_est = total_pnl * 0.25 if total_pnl > 0 else 0
-    
-    m1, m2, m3, m4 = st.columns(4)
-    m1.metric("Gross Profit", f"${total_pnl:,.2f}")
-    m2.metric("Est. After-Tax Net", f"${(total_pnl - tax_est):,.2f}", delta=f"-${tax_est:,.0f} Tax", delta_color="inverse")
-    m3.metric("Win Rate", f"{(len(df_res[df_res['Net Change'] > 0]) / len(df_res) * 100):.1f}%")
-    m4.metric("Avg Trade ROI", f"{df_res['ROI %'].mean():.1f}%")
+    if df_res.empty:
+        st.warning("No completed options or covered call trades found.")
+    else:
+        # --- TOP LEVEL KPIs ---
+        total_pnl = df_res['Net Change'].sum()
+        tax_est = total_pnl * 0.25 if total_pnl > 0 else 0
+        winners = df_res[df_res['Net Change'] > 0]
+        losers = df_res[df_res['Net Change'] < 0]
+        
+        m1, m2, m3, m4 = st.columns(4)
+        m1.metric("Gross Profit", f"${total_pnl:,.2f}")
+        m2.metric("Net (After 25% Tax)", f"${(total_pnl - tax_est):,.2f}")
+        m3.metric("Win Rate", f"{(len(winners)/len(df_res)*100):.1f}%")
+        m4.metric("Avg Trade ROI", f"{df_res['ROI %'].mean():.1f}%")
 
-    st.markdown("---")
-
-    # EQUITY CURVE
-    st.subheader("📈 Cumulative P&L (Equity Curve)")
-    df_res['Cumulative P&L'] = df_res['Net Change'].cumsum()
-    equity_data = df_res[['Close Date', 'Cumulative P&L']].set_index('Close Date')
-    st.line_chart(equity_data)
-    
-    st.markdown("---")
-
-    # NEW: TICKER LEADERBOARD SECTION
-    st.subheader("🏆 Ticker Leaderboard")
-    tick_col1, tick_col2 = st.columns(2)
-    
-    ticker_stats = df_res.groupby('Ticker').agg(
-        Total_PNL=('Net Change', 'sum'),
-        Trade_Count=('Ticker', 'count'),
-        Avg_ROI=('ROI %', 'mean')
-    ).reset_index()
-    
-    ticker_stats['Profit_Per_Trade'] = ticker_stats['Total_PNL'] / ticker_stats['Trade_Count']
-
-    with tick_col1:
-        st.markdown("**Top 5 Profit Makers (Best Friends)**")
-        top_5 = ticker_stats.sort_values('Total_PNL', ascending=False).head(5)
-        st.dataframe(top_5[['Ticker', 'Total_PNL', 'Trade_Count']].style.format({'Total_PNL': '${:,.2f}'}), hide_index=True)
-
-    with tick_col2:
-        st.markdown("**Top 5 Loss Makers (Account Killers)**")
-        bottom_5 = ticker_stats.sort_values('Total_PNL', ascending=True).head(5)
-        st.dataframe(bottom_5[['Ticker', 'Total_PNL', 'Trade_Count']].style.format({'Total_PNL': '${:,.2f}'}), hide_index=True)
-
-    st.markdown("---")
-
-    # ANALYTICS TABS
-    t1, t2 = st.tabs(["📊 Strategy Matrix", "📋 Detailed Log"])
-    
-    with t1:
-        col_s1, col_s2 = st.columns([2, 1])
-        with col_s1:
-            st.markdown("### Performance by Strategy Type")
-            strat_stats = df_res.groupby('Strategy').agg(
-                Total_PNL=('Net Change', 'sum'),
-                Win_Rate=('Net Change', lambda x: (x > 0).mean() * 100),
-                Avg_ROI=('ROI %', 'mean'),
-                Trades=('Ticker', 'count')
-            ).sort_values('Total_PNL', ascending=False)
-            st.table(strat_stats.style.format({'Total_PNL': '${:,.2f}', 'Win_Rate': '{:.1f}%', 'Avg_ROI': '{:.1f}%'}))
-            
-        with col_s2:
-            st.markdown("### ⚖️ Risk Coach")
-            avg_loss = abs(df_res[df_res['Net Change'] < 0]['Net Change'].mean())
-            if pd.isna(avg_loss): avg_loss = 0
-            st.write(f"Your Avg Loss: **${avg_loss:,.2f}**")
-            risk_input = st.number_input("Desired Risk per Trade ($)", value=float(round(avg_loss, 0)) if avg_loss > 0 else 100.0)
-            st.success(f"**Actionable Advice:** Limit total capital per trade to **${risk_input * 10:,.0f}**.")
-
-        # RECOMMENDATIONS
         st.markdown("---")
-        st.markdown("### 💡 Behavioral Coaching")
-        # Find the ticker with the most trades but negative P&L
-        bad_habit_ticker = ticker_stats[ticker_stats['Total_PNL'] < 0].sort_values('Trade_Count', ascending=False).head(1)
-        
-        if not bad_habit_ticker.empty:
-            ticker_name = bad_habit_ticker.iloc[0]['Ticker']
-            st.warning(f"**Overtrading Alert:** You have traded **{ticker_name}** {int(bad_habit_ticker.iloc[0]['Trade_Count'])} times but have a net loss of ${abs(bad_habit_ticker.iloc[0]['Total_PNL']):,.2f}. Consider taking a break from this ticker.")
-        
-        if total_pnl > 0:
-            st.success(f"Keep it up! Your best ticker is **{ticker_stats.sort_values('Total_PNL', ascending=False).iloc[0]['Ticker']}**.")
 
-    with t2:
-        st.dataframe(df_res.drop(columns=['Asset Category', 'Status', 'Cumulative P&L']), width='stretch')
+        # --- 3. EQUITY CURVE & TRENDS ---
+        st.subheader("📈 Consistency Tracking")
+        df_res['Cumulative P&L'] = df_res['Net Change'].cumsum()
+        st.line_chart(df_res.set_index('Close Date')['Cumulative P&L'])
 
-    # Download
-    csv_out = df_res.to_csv(index=False).encode('utf-8')
-    st.download_button("📥 Export Analysis", csv_out, "Trader_Edge_Analysis.csv", "text/csv")
+        st.markdown("---")
+
+        # --- 4. THE CONSOLIDATED TABS ---
+        t1, t2, t3, t4 = st.tabs(["🗓️ Monthly Summary", "🏆 Ticker Leaderboard", "🧠 Strategy & Behavior", "📋 Detailed Log"])
+
+        with t1:
+            st.markdown("### Google Sheet-Style Monthly Summary")
+            df_res['Month'] = df_res['Close Date'].dt.strftime('%B %Y')
+            monthly = df_res.groupby('Month').agg(
+                Total_Trades=('Ticker', 'count'),
+                Net_PNL=('Net Change', 'sum'),
+                Wins=('Net Change', lambda x: (x > 0).sum()),
+                Losses=('Net Change', lambda x: (x < 0).sum())
+            ).reset_index()
+            st.dataframe(monthly.style.format({'Net_PNL': '${:,.2f}'}), width='stretch')
+
+        with t2:
+            st.markdown("### Ticker Performance Leaderboard")
+            ticker_stats = df_res.groupby('Ticker').agg(PNL=('Net Change', 'sum'), Trades=('Ticker', 'count')).reset_index()
+            c_left, c_right = st.columns(2)
+            c_left.write("**Top Profit Makers**")
+            c_left.dataframe(ticker_stats.sort_values('PNL', ascending=False).head(5), hide_index=True)
+            c_right.write("**Top Account Killers**")
+            c_right.dataframe(ticker_stats.sort_values('PNL', ascending=True).head(5), hide_index=True)
+
+        with t3:
+            st.markdown("### Behavior & Risk Coaching")
+            b_left, b_right = st.columns([2, 1])
+            with b_left:
+                # Strategy Matrix
+                strat_df = df_res.groupby('Strategy').agg(PNL=('Net Change', 'sum'), ROI=('ROI %', 'mean'), count=('Ticker', 'count'))
+                st.table(strat_df.style.format({'PNL': '${:,.2f}', 'ROI': '{:.1f}%'}))
+            
+            with b_right:
+                avg_loss = abs(losers['Net Change'].mean()) if not losers.empty else 0
+                st.write(f"Avg Loss: **${avg_loss:,.2f}**")
+                risk_val = st.number_input("Risk Limit ($)", value=float(round(avg_loss,0)) if avg_loss > 0 else 100.0)
+                st.success(f"**Action:** Limit position size to **${risk_val * 10:,.0f}**")
+
+            st.markdown("#### Actionable Insights")
+            if not losers.empty and not winners.empty:
+                if losers['Days Held'].mean() > winners['Days Held'].mean():
+                    st.warning(f"🚨 **Bag Holding Alert:** You hold losers too long. Read: {fetch_dynamic_article('trading psychology cutting losses')}")
+                else:
+                    st.success("✅ Good exit discipline on losing trades.")
+
+        with t4:
+            st.dataframe(df_res.drop(columns=['Status', 'Asset Category', 'Cumulative P&L', 'Month']), width='stretch')
+
+        # --- 5. EXPORT ---
+        csv_out = df_res.to_csv(index=False).encode('utf-8')
+        st.download_button("📥 Download Analysis CSV", csv_out, "Robinhood_Mastery_Report.csv", "text/csv")
