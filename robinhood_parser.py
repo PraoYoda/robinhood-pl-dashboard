@@ -79,6 +79,7 @@ def process_robinhood_csv(uploaded_file):
         pct_change = (net_change / total_buy_amt) if total_buy_amt > 0 else 0.0
         
         days_held = (sell_date - buy_date).days if pd.notna(sell_date) and pd.notna(buy_date) else None
+        status = 'Closed' if pd.notna(buy_date) and pd.notna(sell_date) else 'Open'
 
         summary_rows.append({
             'Ticker': ticker,
@@ -94,7 +95,8 @@ def process_robinhood_csv(uploaded_file):
             'Sell Date': sell_date.strftime('%m/%d/%Y') if pd.notna(sell_date) else None,
             'Days Held': days_held,
             'Let Exp?': let_exp,
-            'Asset Category': final_type
+            'Asset Category': final_type,
+            'Status': status
         })
 
     df_summary = pd.DataFrame(summary_rows)
@@ -106,7 +108,7 @@ def process_robinhood_csv(uploaded_file):
 def render_dashboard_view(df_subset, category_name):
     """Generates the full dashboard UI for a specific subset of data."""
     if df_subset.empty:
-        st.info(f"No data available for {category_name}.")
+        st.info(f"No completed trades available for {category_name}.")
         return
 
     # Calculate Top-Level KPIs
@@ -187,7 +189,7 @@ def render_dashboard_view(df_subset, category_name):
     
     # --- DATA TABLE ---
     st.markdown(f"### {category_name} - Trade Details")
-    display_df = df_temp.drop(columns=['Sell_DT', 'Buy_DT', 'Month_Date', 'Month', 'Month_Sort', 'Is_Put', 'Is_Call'], errors='ignore')
+    display_df = df_temp.drop(columns=['Sell_DT', 'Buy_DT', 'Month_Date', 'Month', 'Month_Sort', 'Is_Put', 'Is_Call', 'Status'], errors='ignore')
     st.dataframe(display_df, width='stretch')
 
 
@@ -214,6 +216,11 @@ if uploaded_file is not None:
             df_result = process_robinhood_csv(uploaded_file)
             df_result['Net Change'] = pd.to_numeric(df_result['Net Change'], errors='coerce').fillna(0)
             
+            # Remove Open Options and Open Covered Calls before rendering dashboard
+            # This ensures only realized/completed option trades affect the charts and P&L
+            open_options_mask = df_result['Asset Category'].isin(['Option', 'Covered Call']) & (df_result['Status'] == 'Open')
+            df_result = df_result[~open_options_mask]
+            
             # Determine available categories
             available_categories = sorted(df_result['Asset Category'].unique().tolist())
             tab_names = ["All Data"] + available_categories
@@ -237,10 +244,11 @@ if uploaded_file is not None:
             buffer = io.BytesIO()
             with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
                 # We export the full dataset regardless of what tab is open
-                df_result.to_excel(writer, index=False, sheet_name='P&L Summary')
+                df_export = df_result.drop(columns=['Status'], errors='ignore')
+                df_export.to_excel(writer, index=False, sheet_name='P&L Summary')
             
             st.download_button(
-                label="📥 Download Raw Processed Excel File (All Categories)",
+                label="📥 Download Raw Processed Excel File (Completed Trades)",
                 data=buffer.getvalue(),
                 file_name="Robinhood_PL_Summary.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
