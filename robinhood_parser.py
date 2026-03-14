@@ -6,7 +6,7 @@ import io
 import urllib.request
 import urllib.parse
 import xml.etree.ElementTree as ET
-import plotly.express as px # Added for the Calendar Heatmap
+import plotly.express as px  # Ensure 'plotly' is in requirements.txt
 
 # --- 1. CORE UTILITIES & PARSING ---
 def clean_amount(val):
@@ -87,19 +87,7 @@ def process_robinhood_csv(uploaded_file):
         })
     return pd.DataFrame(summary_rows)
 
-def detect_revenge_trading(df):
-    revenge_tickers = []
-    df_sorted = df.sort_values('Close Date')
-    for i in range(len(df_sorted) - 1):
-        current_trade = df_sorted.iloc[i]
-        next_trade = df_sorted.iloc[i+1]
-        if current_trade['Net Change'] < 0:
-            time_diff = (next_trade['Buy Date'] - current_trade['Close Date']).total_seconds() / 3600
-            if current_trade['Ticker'] == next_trade['Ticker'] and 0 <= time_diff <= 24:
-                revenge_tickers.append(current_trade['Ticker'])
-    return list(set(revenge_tickers))
-
-# --- 3. UI LAYOUT ---
+# --- 2. UI LAYOUT ---
 st.set_page_config(page_title="Robinhood Quant-View", layout="wide")
 
 st.sidebar.title("⚙️ Quant Settings")
@@ -121,52 +109,48 @@ if uploaded_file:
         # --- TOP LEVEL KPIs ---
         total_pnl = df_res['Net Change'].sum()
         winners = df_res[df_res['Net Change'] > 0]
-        losers = df_res[df_res['Net Change'] < 0]
         
         m1, m2, m3, m4 = st.columns(4)
         m1.metric("Gross Profit", f"${total_pnl:,.2f}")
-        m2.metric("System Win Rate", f"{(len(winners)/len(df_res)*100):.1f}%")
-        m3.metric("Profit/Trade (Avg)", f"${(total_pnl/len(df_res)):,.2f}")
-        m4.metric("Avg Exposure Time", f"{df_res['Days Held'].mean():.1f} Days")
+        m2.metric("Win Rate", f"{(len(winners)/len(df_res)*100):.1f}%")
+        m3.metric("Profit/Trade", f"${(total_pnl/len(df_res)):,.2f}")
+        m4.metric("Avg Exposure", f"{df_res['Days Held'].mean():.1f} Days")
 
         st.markdown("---")
 
-        # --- 4. THE TABS ---
-        t_cal, t1, t2, t3, t4 = st.tabs(["📅 P&L Calendar", "🗓️ Monthly Summary", "📈 Growth Curve", "🏆 Asset Leaderboard", "🧠 Behavioral Analysis"])
+        t_cal, t1, t2, t3, t4 = st.tabs(["📅 Daily P&L Heatmap", "🗓️ Monthly Matrix", "📈 Growth Curve", "🏆 Asset Leaderboard", "🧠 Behavioral Analysis"])
 
         with t_cal:
-            st.markdown("### Daily P&L Heatmap")
-            # Prepare data for calendar
+            st.markdown("### Interactive Daily P&L Heatmap")
             df_cal = df_res.copy()
             df_cal['Date'] = df_cal['Close Date'].dt.date
             daily_pnl = df_cal.groupby('Date')['Net Change'].sum().reset_index()
-            
-            # Create a full range of dates for the view
-            full_range = pd.date_range(start=daily_pnl['Date'].min(), end=daily_pnl['Date'].max())
             daily_pnl['Date'] = pd.to_datetime(daily_pnl['Date'])
-            daily_pnl = daily_pnl.set_index('Date').reindex(full_range).fillna(0).reset_index()
-            daily_pnl.columns = ['Date', 'PNL']
             
-            daily_pnl['Week'] = daily_pnl['Date'].dt.isocalendar().week
-            daily_pnl['Year'] = daily_pnl['Date'].dt.year
+            # Formatting for the heatmap
             daily_pnl['Day'] = daily_pnl['Date'].dt.day_name()
-            daily_pnl['Month'] = daily_pnl['Date'].dt.month_name()
+            daily_pnl['Week'] = daily_pnl['Date'].dt.isocalendar().week
+            daily_pnl['Month_Year'] = daily_pnl['Date'].dt.strftime('%b %Y')
+
+            # Sort days properly
+            day_order = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday']
             
-            # Pivot for Heatmap
-            fig = px.imshow(
-                daily_pnl.pivot_table(index='Day', columns='Week', values='PNL', aggfunc='sum'),
-                labels=dict(x="Week of Year", y="Day of Week", color="Daily P&L"),
-                x=daily_pnl['Week'].unique(),
-                y=['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'],
-                color_continuous_scale='RdYlGn',
-                aspect="auto",
-                title="Profit/Loss Intensity by Day"
+            fig = px.density_heatmap(
+                daily_pnl,
+                x="Week",
+                y="Day",
+                z="Net Change",
+                histfunc="sum",
+                color_continuous_scale="RdYlGn",
+                category_orders={"Day": day_order},
+                title="P&L Concentration by Day & Week",
+                labels={'Net Change': 'P&L ($)'},
+                template="plotly_dark"
             )
             st.plotly_chart(fig, use_container_width=True)
             
-            # Simple Daily List for the selected month
-            st.markdown("#### Daily Breakdown")
-            st.dataframe(daily_pnl[daily_pnl['PNL'] != 0].sort_values('Date', ascending=False)[['Date', 'PNL']].style.format({'PNL': '${:,.2f}'}), hide_index=True)
+            st.markdown("#### Daily Activity Log")
+            st.dataframe(daily_pnl.sort_values('Date', ascending=False)[['Date', 'Net Change']].style.format({'Net Change': '${:,.2f}'}), hide_index=True)
 
         with t1:
             st.markdown("### Monthly Performance Matrix")
@@ -176,9 +160,8 @@ if uploaded_file:
             df_res['Is_Call'] = df_res['Description'].str.contains('Call', case=False, na=False)
             
             monthly = df_res.groupby(['Month_Sort', 'Month']).agg(
-                Total_Trades=('Ticker', 'count'),
+                Trades=('Ticker', 'count'),
                 Wins=('Net Change', lambda x: (x > 0).sum()),
-                Losses=('Net Change', lambda x: (x < 0).sum()),
                 Net_Profit=('Net Change', 'sum'),
                 Tickers=('Ticker', 'nunique'),
                 Puts=('Is_Put', 'sum'),
@@ -186,7 +169,6 @@ if uploaded_file:
             ).reset_index().sort_values('Month_Sort', ascending=False)
             
             st.dataframe(monthly.drop(columns=['Month_Sort']).style.format({'Net_Profit': '${:,.2f}'}), width='stretch')
-            st.bar_chart(monthly.set_index('Month')['Net_Profit'])
 
         with t2:
             st.subheader("Account Equity Curve")
@@ -196,11 +178,11 @@ if uploaded_file:
         with t3:
             st.markdown("### High-Conviction Asset Ranking")
             ticker_stats = df_res.groupby('Ticker').agg(PNL=('Net Change', 'sum'), Trades=('Ticker', 'count')).reset_index()
-            c_left, c_right = st.columns(2)
-            c_left.write("**✅ Top Alpha Generators**")
-            c_left.dataframe(ticker_stats.sort_values('PNL', ascending=False).head(5), hide_index=True)
-            c_right.write("**❌ Top Wealth Destroyers**")
-            c_right.dataframe(ticker_stats.sort_values('PNL', ascending=True).head(5), hide_index=True)
+            c1, c2 = st.columns(2)
+            c1.write("**✅ Top Alpha Generators**")
+            c1.dataframe(ticker_stats.sort_values('PNL', ascending=False).head(5), hide_index=True)
+            c2.write("**❌ Top Wealth Destroyers**")
+            c2.dataframe(ticker_stats.sort_values('PNL', ascending=True).head(5), hide_index=True)
 
         with t4:
             st.markdown("### Behavioral Audit & Coaching")
@@ -210,15 +192,11 @@ if uploaded_file:
                 st.table(strat_df.style.format({'PNL': '${:,.2f}', 'ROI': '{:.1f}%'}))
             
             with b_right:
+                losers = df_res[df_res['Net Change'] < 0]
                 avg_loss_val = abs(losers['Net Change'].mean()) if not losers.empty else 0
                 st.write(f"Measured Avg Loss: **${avg_loss_val:,.2f}**")
                 risk_val = st.number_input("Risk Limit Target ($)", value=float(round(avg_loss_val,0)) if avg_loss_val > 0 else 100.0)
                 st.success(f"**Action Plan:** Position size limit: **${risk_val * 10:,.0f}**")
-
-            st.markdown("#### Coaching Signals")
-            revenge_list = detect_revenge_trading(df_res)
-            if revenge_list:
-                st.error(f"🥊 **Revenge Trading Alert:** Systems detect emotional re-entry on **{', '.join(revenge_list)}**. Learn: {fetch_dynamic_article('psychology of revenge trading')}")
 
         st.markdown("---")
         with st.expander("🔍 Deep-Dive: Historical Audit Log"):
