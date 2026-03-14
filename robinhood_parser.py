@@ -3,6 +3,7 @@ import pandas as pd
 import numpy as np
 import re
 import io
+import openpyxl
 
 def clean_amount(val):
     if pd.isna(val) or val == '': return 0.0
