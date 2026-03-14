@@ -150,15 +150,15 @@ def render_dashboard_view(df_subset, category_name):
             st.write(f"News Insight: {fetch_dynamic_intel(top_t)}")
             st.markdown("**Actionable Strategy:**")
             if call_perf > put_perf:
-                st.write("👉 Your Call options are outperforming. Consider focused long calls or debit spreads on top performers.")
+                st.write("👉 Your Call options are currently outperforming. This suggests a strong edge in bullish momentum or premium harvesting on uptrends.")
             else:
-                st.write("👉 Your Puts show higher efficiency. Consider bearish hedges or capital preservation strategies.")
+                st.write("👉 Puts are providing better relative returns. Consider defensive hedging strategies to preserve capital during volatility.")
         
         with intel_col2:
             st.error(f"⚠️ **Efficiency Gap:** {worst_t}")
             st.write(f"News Insight: {fetch_dynamic_intel(worst_t)}")
             st.markdown("**Risk Adjustment:**")
-            st.write(f"👉 Review strikes for {worst_t}. If losses persist, tighten stops to 40% of premium collected.")
+            st.write(f"👉 Review strikes for {worst_t}. Data suggests your risk/reward ratio is skewed here; consider tightening exits or avoiding high IV events for this ticker.")
 
         st.markdown("---")
 
@@ -197,7 +197,7 @@ def render_dashboard_view(df_subset, category_name):
             return f"background-color: {'#d4edda' if amt > 0 else '#f8d7da'}; font-weight: bold; text-align: center;"
         st.table(styled_cal.style.map(color_pnl))
 
-    # --- 5. TRADE LOG (BOTTOM ANCHORED) ---
+    # --- 5. TRADE LOG ---
     st.markdown("---")
     st.subheader(f"📋 {category_name} Trade Log")
     csv = df_subset.to_csv(index=False).encode('utf-8')
@@ -212,10 +212,14 @@ def render_dashboard_view(df_subset, category_name):
 st.set_page_config(page_title="Robinhood Dashboard", layout="wide", page_icon="📈")
 st.title("📈 Interactive Robinhood Options Dashboard")
 
-# --- SIDEBAR: REORDERED NAME & LINK ---
-st.sidebar.title("📊 Account Insights")
+# --- SIDEBAR: NEW DESCRIPTION ---
 st.sidebar.markdown("👨‍💻 **Puneeth Rao**")
 st.sidebar.markdown("[🔗 LinkedIn Profile](https://www.linkedin.com/in/puneeth-rao-9154b511/)")
+st.sidebar.markdown("---")
+st.sidebar.subheader("🎯 Trade Edge Intelligence")
+st.sidebar.info("""
+    **Transforming raw data into actionable trade alpha.** This dashboard provides a high-fidelity view of your options and covered call performance, uncovering your behavioral edge and directional bias to refine your path toward consistent income.
+""")
 
 search_query = st.sidebar.text_input("🔍 Search Ticker or Contract", "").strip().upper()
 st.sidebar.markdown("---")
@@ -224,7 +228,7 @@ uploaded_file = st.file_uploader("Upload Robinhood CSV", type=["csv"])
 
 if uploaded_file:
     df_raw = process_robinhood_csv(uploaded_file)
-    df_raw = df_raw[df_raw['Asset Category'] != 'Other'] # Filters out Stocks
+    df_raw = df_raw[df_raw['Asset Category'] != 'Other'] # Kill Stocks
     
     if search_query:
         df_raw = df_raw[df_raw['Ticker'].str.contains(search_query, na=False) | 
@@ -232,7 +236,7 @@ if uploaded_file:
     
     st.sidebar.metric("Open Positions", len(df_raw[df_raw['Status'] == 'Open']))
 
-    t1, t2, t3 = st.tabs(["All Data", "Options Only", "Covered Calls Only"])
+    t1, t2, t3 = st.tabs(["All Portfolio", "Options Only", "Covered Calls Only"])
     with t1: render_dashboard_view(df_raw, "Portfolio")
     with t2: render_dashboard_view(df_raw[df_raw['Asset Category'] == 'Option'], "Options")
     with t3: render_dashboard_view(df_raw[df_raw['Asset Category'] == 'Covered Call'], "Covered Calls")
