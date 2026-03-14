@@ -4,7 +4,6 @@ import numpy as np
 import re
 import io
 
-
 def clean_amount(val):
     if pd.isna(val) or val == '': return 0.0
     val = str(val).replace('$', '').replace(',', '')
@@ -112,11 +111,17 @@ def render_dashboard_view(df_subset, category_name):
         st.info(f"No completed trades available for {category_name}.")
         return
 
+    # Convert columns for accurate math
+    df_subset['Days Held'] = pd.to_numeric(df_subset['Days Held'], errors='coerce')
+
     # Calculate Top-Level KPIs
     total_pnl = df_subset['Net Change'].sum()
     total_trades = len(df_subset)
-    winning_trades = len(df_subset[df_subset['Net Change'] > 0])
-    losing_trades = len(df_subset[df_subset['Net Change'] < 0])
+    winners = df_subset[df_subset['Net Change'] > 0]
+    losers = df_subset[df_subset['Net Change'] < 0]
+    
+    winning_trades = len(winners)
+    losing_trades = len(losers)
     win_rate = (winning_trades / (winning_trades + losing_trades)) * 100 if (winning_trades + losing_trades) > 0 else 0
     
     # --- KPI ROW ---
@@ -127,15 +132,90 @@ def render_dashboard_view(df_subset, category_name):
     col4.metric("Total Trades", total_trades)
     
     st.markdown("---")
+
+    # --- KEY INSIGHTS ROW 1: THE EXTREMES ---
+    st.markdown(f"### 💡 {category_name} - Highlights")
+    
+    ticker_stats = df_subset.groupby('Ticker').agg(
+        Net_Profit=('Net Change', 'sum'),
+        Trade_Count=('Ticker', 'count')
+    ).reset_index()
+
+    if not ticker_stats.empty:
+        top_traded = ticker_stats.loc[ticker_stats['Trade_Count'].idxmax()]
+        top_profit = ticker_stats.loc[ticker_stats['Net_Profit'].idxmax()]
+        top_loss = ticker_stats.loc[ticker_stats['Net_Profit'].idxmin()]
+        
+        col_in1, col_in2, col_in3 = st.columns(3)
+        col_in1.metric("🔥 Most Traded Ticker", f"{top_traded['Ticker']}", f"{int(top_traded['Trade_Count'])} Trades", delta_color="off")
+        
+        if top_profit['Net_Profit'] > 0:
+            col_in2.metric("🏆 Top Profit Maker", f"{top_profit['Ticker']}", f"${top_profit['Net_Profit']:,.2f}")
+        else:
+            col_in2.metric("🏆 Top Profit Maker", "None", "$0.00")
+            
+        if top_loss['Net_Profit'] < 0:
+            col_in3.metric("📉 Biggest Loss Maker", f"{top_loss['Ticker']}", f"${top_loss['Net_Profit']:,.2f}")
+        else:
+            col_in3.metric("📉 Biggest Loss Maker", "No Losses!", "$0.00", delta_color="off")
+
+    st.markdown("---")
+
+    # --- KEY INSIGHTS ROW 2: TRADE BEHAVIOR ---
+    st.markdown(f"### 🧠 Trade Behavior & Efficiency")
+    
+    avg_win = winners['Net Change'].mean() if not winners.empty else 0
+    avg_loss = losers['Net Change'].mean() if not losers.empty else 0
+    risk_reward = abs(avg_win / avg_loss) if avg_loss != 0 else 0
+    
+    avg_days_win = winners['Days Held'].mean() if not winners.empty else 0
+    avg_days_loss = losers['Days Held'].mean() if not losers.empty else 0
+
+    ticker_win_rates = df_subset.groupby('Ticker').agg(
+        Total_Trades=('Net Change', 'count'),
+        Wins=('Net Change', lambda x: (x > 0).sum())
+    )
+    ticker_win_rates['Win_Rate'] = ticker_win_rates['Wins'] / ticker_win_rates['Total_Trades']
+    eligible_tickers = ticker_win_rates[ticker_win_rates['Total_Trades'] >= 3]
+    
+    col_b1, col_b2, col_b3 = st.columns(3)
+    
+    # Metric 1: Risk Reward
+    col_b1.metric(
+        "⚖️ Avg Win vs. Avg Loss", 
+        f"${avg_win:,.0f} / ${abs(avg_loss):,.0f}", 
+        f"Ratio: {risk_reward:.2f}x", 
+        delta_color="normal" if risk_reward >= 1 else "inverse"
+    )
+    
+    # Metric 2: Holding Times
+    col_b2.metric(
+        "⏱️ Avg Win Hold Time", 
+        f"{avg_days_win:.1f} days", 
+        f"Losers held {avg_days_loss:.1f} days", 
+        delta_color="inverse" if avg_days_loss > avg_days_win else "normal"
+    )
+    
+    # Metric 3: Most Reliable Ticker
+    if not eligible_tickers.empty:
+        best_ticker_wr = eligible_tickers.loc[eligible_tickers['Win_Rate'].idxmax()]
+        col_b3.metric(
+            "🎯 Most Reliable Ticker (3+ Trades)", 
+            f"{best_ticker_wr.name}", 
+            f"{best_ticker_wr['Win_Rate'] * 100:.0f}% Win Rate"
+        )
+    else:
+        col_b3.metric("🎯 Most Reliable Ticker", "Need more data", "Min 3 trades required", delta_color="off")
+
+    st.markdown("---")
     
     # --- MONTHLY SUMMARY ---
-    st.markdown(f"### {category_name} - Monthly Summary")
+    st.markdown(f"### 📅 {category_name} - Monthly Summary")
     df_temp = df_subset.copy()
     df_temp['Sell_DT'] = pd.to_datetime(df_temp['Sell Date'], errors='coerce')
     df_temp['Buy_DT'] = pd.to_datetime(df_temp['Buy Date'], errors='coerce')
     df_temp['Month_Date'] = df_temp['Sell_DT'].fillna(df_temp['Buy_DT'])
     
-    # Filter rows that have a valid date
     valid_dates = df_temp.dropna(subset=['Month_Date']).copy()
     
     if not valid_dates.empty:
@@ -167,7 +247,6 @@ def render_dashboard_view(df_subset, category_name):
         
         st.dataframe(monthly_summary.style.format({'Total Net Profit/Loss': '${:,.2f}'}), width='stretch')
         
-        # --- CHARTS ---
         col_chart1, col_chart2 = st.columns(2)
         with col_chart1:
             st.markdown("#### P&L By Month")
@@ -189,7 +268,7 @@ def render_dashboard_view(df_subset, category_name):
     st.markdown("---")
     
     # --- DATA TABLE ---
-    st.markdown(f"### {category_name} - Trade Details")
+    st.markdown(f"### 📋 {category_name} - Trade Details")
     display_df = df_temp.drop(columns=['Sell_DT', 'Buy_DT', 'Month_Date', 'Month', 'Month_Sort', 'Is_Put', 'Is_Call', 'Status'], errors='ignore')
     st.dataframe(display_df, width='stretch')
 
@@ -197,14 +276,12 @@ def render_dashboard_view(df_subset, category_name):
 # --- STREAMLIT UI ---
 st.set_page_config(page_title="Robinhood P&L Dashboard", layout="wide")
 
-# --- SIDEBAR: AUTHOR INFO ---
 st.sidebar.markdown("## About the Creator")
 st.sidebar.markdown("This tool was built to automate Robinhood options and stock P&L tracking, specifically optimized for covered calls and monthly tracking.")
 st.sidebar.markdown("---")
 st.sidebar.markdown("👨‍💻 **Created by Puneeth Rao**")
 st.sidebar.markdown("🔗 [Connect with me on LinkedIn](https://www.linkedin.com/in/puneeth-rao/)")
 
-# --- MAIN DASHBOARD ---
 st.title("📈 Interactive Robinhood P&L Dashboard")
 st.write("Upload your raw Robinhood statement CSV to generate your dynamic trading tracker.")
 
@@ -213,23 +290,17 @@ uploaded_file = st.file_uploader("Upload Robinhood CSV", type=["csv"])
 if uploaded_file is not None:
     with st.spinner("Processing your trades..."):
         try:
-            # Process the file
             df_result = process_robinhood_csv(uploaded_file)
             df_result['Net Change'] = pd.to_numeric(df_result['Net Change'], errors='coerce').fillna(0)
             
-            # Remove Open Options and Open Covered Calls before rendering dashboard
-            # This ensures only realized/completed option trades affect the charts and P&L
             open_options_mask = df_result['Asset Category'].isin(['Option', 'Covered Call']) & (df_result['Status'] == 'Open')
             df_result = df_result[~open_options_mask]
             
-            # Determine available categories
             available_categories = sorted(df_result['Asset Category'].unique().tolist())
             tab_names = ["All Data"] + available_categories
             
-            # Create Tabs
             tabs = st.tabs(tab_names)
             
-            # Populate Tabs
             for i, tab in enumerate(tabs):
                 with tab:
                     if tab_names[i] == "All Data":
@@ -240,19 +311,15 @@ if uploaded_file is not None:
             
             st.markdown("---")
             
-            # --- GLOBAL DOWNLOAD BUTTON ---
             st.markdown("### Export Full Report")
-            buffer = io.BytesIO()
-            with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
-                # We export the full dataset regardless of what tab is open
-                df_export = df_result.drop(columns=['Status'], errors='ignore')
-                df_export.to_excel(writer, index=False, sheet_name='P&L Summary')
+            df_export = df_result.drop(columns=['Status'], errors='ignore')
+            csv_data = df_export.to_csv(index=False).encode('utf-8')
             
             st.download_button(
-                label="📥 Download Raw Processed Excel File (Completed Trades)",
-                data=buffer.getvalue(),
-                file_name="Robinhood_PL_Summary.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                label="📥 Download Processed CSV File (Completed Trades)",
+                data=csv_data,
+                file_name="Robinhood_PL_Summary.csv",
+                mime="text/csv"
             )
             
         except Exception as e:
