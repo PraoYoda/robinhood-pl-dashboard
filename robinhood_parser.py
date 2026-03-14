@@ -127,34 +127,49 @@ def render_dashboard_view(df_subset, category_name):
     
     st.markdown("---")
     
-    # 📝 DYNAMIC RECOMMENDATIONS & CONTENT
-    st.markdown("### 🔍 Market Intel & Recommendations")
-    best_ticker = df_closed.groupby('Ticker')['Net Change'].sum().idxmax()
-    worst_ticker = df_closed.groupby('Ticker')['Net Change'].sum().idxmin()
+    # 📝 PERFORMANCE ANALYTICS (FORMERLY MARKET INTEL)
+    st.markdown("### 📊 Performance Analytics")
+    
+    # Ticker Table Logic: Top Winner & Top Loser
+    ticker_stats = df_closed.groupby('Ticker').agg(
+        Net_Profit=('Net Change', 'sum'),
+        Avg_Win=('Net Change', lambda x: x[x > 0].mean()),
+        Avg_Loss=('Net Change', lambda x: x[x < 0].mean()),
+        Trade_Count=('Net Change', 'count')
+    ).fillna(0)
+
+    st.dataframe(ticker_stats.sort_values(by='Net_Profit', ascending=False), use_container_width=True)
+
+    best_ticker = ticker_stats['Net_Profit'].idxmax()
+    worst_ticker = ticker_stats['Net_Profit'].idxmin()
     
     rec_col1, rec_col2 = st.columns(2)
     with rec_col1:
-        st.success(f"📈 **Top Performer:** {best_ticker}")
+        st.success(f"📈 **Top Winning Ticker:** {best_ticker} (Avg Win: ${ticker_stats.loc[best_ticker, 'Avg_Win']:,.2f})")
         st.write(f"Latest News: {fetch_dynamic_article(best_ticker + ' stock')}")
     with rec_col2:
-        st.error(f"⚠️ **Most Drag:** {worst_ticker}")
+        st.error(f"⚠️ **Top Losing Ticker:** {worst_ticker} (Avg Loss: ${ticker_stats.loc[worst_ticker, 'Avg_Loss']:,.2f})")
         st.write(f"Latest News: {fetch_dynamic_article(worst_ticker + ' stock')}")
 
     st.markdown("---")
 
     # DEEP DIVE ANALYTICS
-    st.markdown(f"### 🔬 Deep Dive: {category_name} Analytics")
+    st.markdown(f"### 🔬 Deep Dive: {category_name} Insights")
+    
+    avg_p_l = total_pnl / len(df_closed) if len(df_closed) > 0 else 0
+    
     ana_col1, ana_col2, ana_col3 = st.columns(3)
     with ana_col1:
-        st.markdown("**Trade Style Performance**")
-        st.write(f"📈 **Swing:** ${df_closed[df_closed['Trade Style'] == 'Swing Trade']['Net Change'].sum():,.2f}")
-        st.write(f"⚡ **Day:** ${df_closed[df_closed['Trade Style'] == 'Day Trade']['Net Change'].sum():,.2f}")
+        st.markdown("**Core Profitability**")
+        st.write(f"💵 **Avg P/L per Trade:** ${avg_p_l:,.2f}")
+        st.caption("Signifies your 'expected value' for every position opened.")
+        st.write(f"📈 **Swing Net:** ${df_closed[df_closed['Trade Style'] == 'Swing Trade']['Net Change'].sum():,.2f}")
     with ana_col2:
-        st.markdown("**Call vs. Put Focus**")
+        st.markdown("**Directional Bias**")
         st.write(f"🐂 **Calls Net:** ${df_closed[df_closed['Is_Call']]['Net Change'].sum():,.2f}")
-        st.write(f"🐻 **Puts Net:** ${df_closed[df_closed['Is_Put']]['Net Change'].sum():,.2f}")
+        st.write(f"bear **Puts Net:** ${df_closed[df_closed['Is_Put']]['Net Change'].sum():,.2f}")
     with ana_col3:
-        st.markdown("**Entry Day Efficiency**")
+        st.markdown("**Efficiency**")
         dow_stats = df_closed.groupby('Buy DoW')['Net Change'].sum()
         st.write(f"✅ **Best Day:** {dow_stats.idxmax()}")
         st.write(f"❌ **Worst Day:** {dow_stats.idxmin()}")
@@ -201,9 +216,12 @@ st.title("📈 Interactive Robinhood P&L Dashboard")
 # SIDEBAR INTRO
 st.sidebar.title("📊 Account Insights")
 st.sidebar.info("""
-Welcome to your **Trade Intel Dashboard**. 
-Analyze your Robinhood options and covered calls history with dynamic market data and behavioral analytics.
+Analyze your Robinhood options and covered calls history with dynamic performance tracking and deep-dive analytics.
 """)
+
+# Added LinkedIn Link
+st.sidebar.markdown("[🔗 View My LinkedIn Profile](https://www.linkedin.com/in/puneeth-rao-9154b511/)")
+
 st.sidebar.markdown("---")
 
 uploaded_file = st.file_uploader("Upload Robinhood CSV", type=["csv"])
@@ -226,3 +244,4 @@ if uploaded_file:
     for i, tab in enumerate(tabs):
         with tab:
             render_dashboard_view(df_final if categories[i] == "All Data" else df_final[df_final['Asset Category'] == categories[i]], categories[i])
+            
