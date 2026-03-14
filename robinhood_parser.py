@@ -3,6 +3,9 @@ import pandas as pd
 import numpy as np
 import re
 import io
+import urllib.request
+import urllib.parse
+import xml.etree.ElementTree as ET
 
 def clean_amount(val):
     if pd.isna(val) or val == '': return 0.0
@@ -37,6 +40,27 @@ def get_core_desc(row):
         match = re.search(r'Option Expiration for (.*)', desc)
         if match: return match.group(1).strip()
     return desc.strip()
+
+@st.cache_data(ttl=3600)  # Caches the result for 1 hour so the app stays lightning fast
+def fetch_dynamic_article(query):
+    """Fetches the #1 trending article from Google News based on the specific trading gap."""
+    try:
+        url = f"https://news.google.com/rss/search?q={urllib.parse.quote(query)}"
+        req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
+        with urllib.request.urlopen(req, timeout=3) as response:
+            xml_data = response.read()
+        root = ET.fromstring(xml_data)
+        item = root.find('.//channel/item')
+        if item is not None:
+            title = item.find('title').text
+            link = item.find('link').text
+            # Clean up the title a bit by removing the publisher name at the end if it exists
+            clean_title = title.split(' - ')[0] 
+            return f"[{clean_title}]({link})"
+    except Exception as e:
+        pass
+    # Fallback to a dynamic Google Search if the RSS feed times out
+    return f"[Click here to search trending articles for '{query}'](https://www.google.com/search?q={urllib.parse.quote(query)})"
 
 def process_robinhood_csv(uploaded_file):
     df = pd.read_csv(uploaded_file, on_bad_lines='skip')
@@ -106,15 +130,12 @@ def process_robinhood_csv(uploaded_file):
     return df_summary
 
 def render_dashboard_view(df_subset, category_name):
-    """Generates the full dashboard UI for a specific subset of data."""
     if df_subset.empty:
         st.info(f"No completed trades available for {category_name}.")
         return
 
-    # Convert columns for accurate math
     df_subset['Days Held'] = pd.to_numeric(df_subset['Days Held'], errors='coerce')
 
-    # Calculate Top-Level KPIs
     total_pnl = df_subset['Net Change'].sum()
     total_trades = len(df_subset)
     winners = df_subset[df_subset['Net Change'] > 0]
@@ -124,7 +145,6 @@ def render_dashboard_view(df_subset, category_name):
     losing_trades = len(losers)
     win_rate = (winning_trades / (winning_trades + losing_trades)) * 100 if (winning_trades + losing_trades) > 0 else 0
     
-    # --- KPI ROW ---
     col1, col2, col3, col4 = st.columns(4)
     col1.metric("Total Net Profit/Loss", f"${total_pnl:,.2f}")
     col2.metric("Win Rate", f"{win_rate:.1f}%")
@@ -133,9 +153,7 @@ def render_dashboard_view(df_subset, category_name):
     
     st.markdown("---")
 
-    # --- KEY INSIGHTS ROW 1: THE EXTREMES ---
     st.markdown(f"### 💡 {category_name} - Highlights")
-    
     ticker_stats = df_subset.groupby('Ticker').agg(
         Net_Profit=('Net Change', 'sum'),
         Trade_Count=('Ticker', 'count')
@@ -161,9 +179,7 @@ def render_dashboard_view(df_subset, category_name):
 
     st.markdown("---")
 
-    # --- KEY INSIGHTS ROW 2: TRADE BEHAVIOR ---
     st.markdown(f"### 🧠 Trade Behavior & Efficiency")
-    
     avg_win = winners['Net Change'].mean() if not winners.empty else 0
     avg_loss = losers['Net Change'].mean() if not losers.empty else 0
     risk_reward = abs(avg_win / avg_loss) if avg_loss != 0 else 0
@@ -180,7 +196,6 @@ def render_dashboard_view(df_subset, category_name):
     
     col_b1, col_b2, col_b3 = st.columns(3)
     
-    # Metric 1: Risk Reward
     col_b1.metric(
         "⚖️ Avg Win vs. Avg Loss", 
         f"${avg_win:,.0f} / ${abs(avg_loss):,.0f}", 
@@ -188,7 +203,6 @@ def render_dashboard_view(df_subset, category_name):
         delta_color="normal" if risk_reward >= 1 else "inverse"
     )
     
-    # Metric 2: Holding Times
     col_b2.metric(
         "⏱️ Avg Win Hold Time", 
         f"{avg_days_win:.1f} days", 
@@ -196,7 +210,6 @@ def render_dashboard_view(df_subset, category_name):
         delta_color="inverse" if avg_days_loss > avg_days_win else "normal"
     )
     
-    # Metric 3: Most Reliable Ticker
     if not eligible_tickers.empty:
         best_ticker_wr = eligible_tickers.loc[eligible_tickers['Win_Rate'].idxmax()]
         col_b3.metric(
@@ -207,30 +220,31 @@ def render_dashboard_view(df_subset, category_name):
     else:
         col_b3.metric("🎯 Most Reliable Ticker", "Need more data", "Min 3 trades required", delta_color="off")
 
-    # --- NEW: ACTIONABLE RECOMMENDATIONS WITH LINKS ---
+    # --- ACTIONABLE RECOMMENDATIONS WITH DYNAMIC TRENDING LINKS ---
     st.markdown("### 🛠️ Actionable Recommendations & Learning")
     
     recommendations = []
     
-    # Risk/Reward Recommendation
     if risk_reward > 0 and risk_reward < 1.0:
-        recommendations.append("🚨 **Risk/Reward Warning:** Your average loss is larger than your average win. You are forced to maintain a very high win rate just to break even. \n\n* **Action:** Consider setting tighter stop-losses to cut losers faster. \n* **Learn:** [Investopedia Guide to Risk/Reward Ratio](https://www.investopedia.com/terms/r/riskrewardratio.asp)")
+        article = fetch_dynamic_article("how to improve trading risk reward ratio strategy")
+        recommendations.append(f"🚨 **Risk/Reward Warning:** Your average loss is larger than your average win. \n\n* **Action:** Consider setting tighter stop-losses to cut losers faster. \n* **Trending Read:** {article}")
     elif risk_reward >= 1.5:
-        recommendations.append("✅ **Excellent Risk/Reward:** Your winners are significantly outperforming your losers. You are letting your winners run successfully! \n\n* **Action:** Consider using trailing stop-losses to protect these larger gains. \n* **Learn:** [How to Set a Trailing Stop-Loss](https://www.investopedia.com/articles/trading/08/trailing-stop-loss.asp)")
+        article = fetch_dynamic_article("how to use trailing stop loss to maximize trading profits")
+        recommendations.append(f"✅ **Excellent Risk/Reward:** Your winners are significantly outperforming your losers! \n\n* **Action:** Consider using trailing stop-losses to protect these larger gains. \n* **Trending Read:** {article}")
         
-    # Holding Time Recommendation
     if avg_days_loss > avg_days_win and avg_days_win > 0:
-        recommendations.append("📉 **Bag Holding Alert:** You hold onto losing trades longer than winning trades. This ties up your capital in bad setups. \n\n* **Action:** Try implementing a strict 'time-stop' (e.g., if a trade doesn't move in your favor after 3 days, cut it). \n* **Learn:** [Understanding Time Stops in Trading](https://www.investopedia.com/articles/active-trading/091813/which-stop-loss-strategy-right-you.asp)")
+        article = fetch_dynamic_article("trading psychology cutting losses short")
+        recommendations.append(f"📉 **Bag Holding Alert:** You hold onto losing trades longer than winning trades, tying up capital. \n\n* **Action:** Try implementing a strict 'time-stop' (e.g., if a trade doesn't move in your favor after a few days, cut it). \n* **Trending Read:** {article}")
     elif avg_days_win > avg_days_loss and avg_days_loss > 0:
-        recommendations.append("📈 **Great Holding Discipline:** You are cutting losers faster than you close winners. This is textbook good trading behavior. Keep trusting your early exit indicators on losing setups.")
+        recommendations.append("📈 **Great Holding Discipline:** You are cutting losers faster than you close winners. Keep trusting your early exit indicators on losing setups.")
         
-    # Win Rate Recommendation
     if win_rate < 40 and total_trades >= 5:
-        recommendations.append("⚠️ **Low Win Rate:** With a win rate below 40%, you might be forcing trades. \n\n* **Action:** Review your entry criteria. Consider trading less frequently and waiting for higher-probability A+ setups before deploying capital. \n* **Learn:** [How to Improve Your Trading Success Rate](https://www.investopedia.com/articles/active-trading/100914/how-improve-your-trading-success-rate.asp)")
+        article = fetch_dynamic_article("how to improve trading win rate setup criteria")
+        recommendations.append(f"⚠️ **Low Win Rate:** With a win rate below 40%, you might be forcing trades. \n\n* **Action:** Review your entry criteria. Trade less frequently and wait for A+ setups. \n* **Trending Read:** {article}")
         
-    # Best Ticker Recommendation
     if not eligible_tickers.empty and best_ticker_wr['Win_Rate'] >= 0.7:
-        recommendations.append(f"⭐ **Double Down on {best_ticker_wr.name}:** You have a highly successful track record ({best_ticker_wr['Win_Rate'] * 100:.0f}% win rate) trading **{best_ticker_wr.name}**. \n\n* **Action:** Consider scaling up your position sizing on A+ setups for this specific ticker. \n* **Learn:** [The Ultimate Guide to Position Sizing](https://www.investopedia.com/terms/p/positionsizing.asp)")
+        article = fetch_dynamic_article("position sizing strategy in stock options trading")
+        recommendations.append(f"⭐ **Double Down on {best_ticker_wr.name}:** You have a highly successful track record ({best_ticker_wr['Win_Rate'] * 100:.0f}% win rate) trading **{best_ticker_wr.name}**. \n\n* **Action:** Consider scaling up your position sizing on A+ setups for this specific ticker. \n* **Trending Read:** {article}")
 
     if recommendations:
         for rec in recommendations:
@@ -239,11 +253,10 @@ def render_dashboard_view(df_subset, category_name):
             else:
                 st.success(rec)
     else:
-        st.info("Keep trading! Once you have more data (winners, losers, and 3+ trades on a ticker), advanced behavioral recommendations and learning links will appear here.")
+        st.info("Keep trading! Once you have more data, advanced behavioral recommendations and live trending articles will appear here.")
 
     st.markdown("---")
     
-    # --- MONTHLY SUMMARY ---
     st.markdown(f"### 📅 {category_name} - Monthly Summary")
     df_temp = df_subset.copy()
     df_temp['Sell_DT'] = pd.to_datetime(df_temp['Sell Date'], errors='coerce')
@@ -301,7 +314,6 @@ def render_dashboard_view(df_subset, category_name):
 
     st.markdown("---")
     
-    # --- DATA TABLE ---
     st.markdown(f"### 📋 {category_name} - Trade Details")
     display_df = df_temp.drop(columns=['Sell_DT', 'Buy_DT', 'Month_Date', 'Month', 'Month_Sort', 'Is_Put', 'Is_Call', 'Status'], errors='ignore')
     st.dataframe(display_df, width='stretch')
