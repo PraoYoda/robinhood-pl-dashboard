@@ -7,7 +7,7 @@ import urllib.request
 import urllib.parse
 import xml.etree.ElementTree as ET
 
-# --- 1. CORE UTILITIES ---
+# --- CORE UTILITIES ---
 def clean_amount(val):
     if pd.isna(val) or val == '': return 0.0
     val = str(val).replace('$', '').replace(',', '')
@@ -29,6 +29,12 @@ def get_asset_type(row):
         if trans == 'STO': return 'Covered Call'
         return 'Option'
     return 'Stock'
+
+def get_strategy(row):
+    desc = str(row['Description']).upper()
+    if 'CALL' in desc: return 'Long Call' if row['Asset Category'] == 'Option' else 'Covered Call'
+    if 'PUT' in desc: return 'Long Put'
+    return 'Equity'
 
 @st.cache_data(ttl=3600)
 def fetch_dynamic_article(query):
@@ -74,96 +80,113 @@ def process_robinhood_csv(uploaded_file):
             'Days Held': days_held,
             'Status': status,
             'Asset Category': group['Asset Category'].iloc[0],
-            'Close Date': sell_date,
-            'Buy Date': buy_date
+            'Strategy': get_strategy(group.iloc[0]),
+            'Close Date': sell_date
         })
     return pd.DataFrame(summary_rows)
 
-def render_strategy_view(df, title, is_option=True):
-    """Renders the dashboard for a specific strategy."""
-    if df.empty:
-        st.info(f"No {title} data available.")
-        return
+# --- UI LAYOUT ---
+st.set_page_config(page_title="Robinhood Elite Dashboard", layout="wide")
 
-    # --- TOP LEVEL KPIs ---
-    total_pnl = df['Net Change'].sum()
-    winners = df[df['Net Change'] > 0]
-    
-    m1, m2, m3, m4 = st.columns(4)
-    m1.metric("Total Net P&L", f"${total_pnl:,.2f}")
-    m2.metric("Win Rate", f"{(len(winners)/len(df)*100):.1f}%")
-    m3.metric("Avg ROI", f"{df['ROI %'].mean():.1f}%")
-    m4.metric("Total Trades", len(df))
+# Sidebar
+st.sidebar.title("🛠️ Trader's Toolkit")
+st.sidebar.markdown("👨‍💻 **Puneeth Rao** | [LinkedIn](https://www.linkedin.com/in/puneeth-rao/)")
+st.sidebar.info("Optimized for Options Mastery")
 
-    st.markdown("---")
+# Main
+st.title("📈 Robinhood Options Mastery Dashboard")
 
-    # --- CALENDAR SELECTOR & SUMMARY ---
-    st.subheader(f"🗓️ {title} Monthly Calendar View")
-    df['MonthYear'] = df['Close Date'].dt.strftime('%B %Y')
-    available_months = df['MonthYear'].unique().tolist()
-    selected_month = st.selectbox(f"Select Month to Audit ({title})", available_months)
-
-    month_df = df[df['MonthYear'] == selected_month].copy()
-    
-    # Metrics for the month
-    month_pnl = month_df['Net Change'].sum()
-    unique_tickers = month_df['Ticker'].nunique()
-    puts = month_df['Description'].str.contains('Put', case=False).sum()
-    calls = month_df['Description'].str.contains('Call', case=False).sum()
-
-    col_a, col_b, col_c, col_d = st.columns(4)
-    col_a.write(f"**Monthly P&L:** ${month_pnl:,.2f}")
-    col_b.write(f"**Unique Tickers:** {unique_tickers}")
-    col_c.write(f"**Puts:** {puts}")
-    col_d.write(f"**Calls:** {calls}")
-
-    # Daily Breakdown List (The "Calendar Image" alternative)
-    month_df['Date'] = month_df['Close Date'].dt.date
-    daily = month_df.groupby('Date')['Net Change'].sum().reset_index()
-    st.dataframe(daily.sort_values('Date').style.format({'Net Change': '${:,.2f}'}), width='stretch', hide_index=True)
-
-    # --- DYNAMIC RECOMMENDATIONS (Options Only) ---
-    if is_option:
-        st.markdown("---")
-        st.subheader("💡 Actionable Recommendations")
-        avg_loss = abs(df[df['Net Change'] < 0]['Net Change'].mean())
-        if not pd.isna(avg_loss):
-            st.warning(f"🚨 **Risk Alert:** Your average loss is **${avg_loss:,.2f}**. Read: {fetch_dynamic_article('options risk management strategies')}")
-        
-        if total_pnl < 0:
-            st.error(f"⚠️ **Strategy Leak Detected:** {fetch_dynamic_article('how to fix losing options trades')}")
-        else:
-            st.success(f"✅ **Performance Note:** {fetch_dynamic_article('scaling winning options strategies')}")
-
-    st.markdown("---")
-    st.subheader(f"📋 {title} Detailed Log")
-    st.dataframe(df.drop(columns=['Status', 'Asset Category', 'MonthYear']), width='stretch')
-
-# --- 2. MAIN UI ---
-st.set_page_config(page_title="Robinhood Quant-View", layout="wide")
-
-# Sidebar Restoration
-st.sidebar.title("🛠️ Settings")
-st.sidebar.markdown("👨‍💻 **Created by Puneeth Rao**")
-st.sidebar.markdown("🔗 [Connect with me on LinkedIn](https://www.linkedin.com/in/puneeth-rao/)")
-st.sidebar.info("Optimized for Options & Covered Call Mastery")
-
-st.title("🔬 Robinhood Quant-View")
-
-uploaded_file = st.file_uploader("Upload Robinhood CSV", type=["csv"])
+uploaded_file = st.file_uploader("Upload Your Robinhood Account History CSV", type=["csv"])
 
 if uploaded_file:
-    df_raw = process_robinhood_csv(uploaded_file)
-    df_closed = df_raw[df_raw['Status'] == 'Closed'].copy()
+    df_res = process_robinhood_csv(uploaded_file)
+    df_res = df_res[df_res['Status'] == 'Closed']
+    df_res = df_res[df_res['Asset Category'].isin(['Option', 'Covered Call'])]
+    df_res = df_res.sort_values('Close Date')
 
-    # Strategy Split
-    df_options = df_closed[df_closed['Asset Category'] == 'Option']
-    df_cc = df_closed[df_closed['Asset Category'] == 'Covered Call']
-
-    tab1, tab2 = st.tabs(["🔥 Standard Options", "🛡️ Covered Calls"])
-
-    with tab1:
-        render_strategy_view(df_options, "Standard Options", is_option=True)
+    # Top Metrics
+    total_pnl = df_res['Net Change'].sum()
+    tax_est = total_pnl * 0.25 if total_pnl > 0 else 0
     
-    with tab2:
-        render_strategy_view(df_cc, "Covered Calls", is_option=False)
+    m1, m2, m3, m4 = st.columns(4)
+    m1.metric("Gross Profit", f"${total_pnl:,.2f}")
+    m2.metric("Est. After-Tax Net", f"${(total_pnl - tax_est):,.2f}", delta=f"-${tax_est:,.0f} Tax", delta_color="inverse")
+    m3.metric("Win Rate", f"{(len(df_res[df_res['Net Change'] > 0]) / len(df_res) * 100):.1f}%")
+    m4.metric("Avg Trade ROI", f"{df_res['ROI %'].mean():.1f}%")
+
+    st.markdown("---")
+
+    # EQUITY CURVE
+    st.subheader("📈 Cumulative P&L (Equity Curve)")
+    df_res['Cumulative P&L'] = df_res['Net Change'].cumsum()
+    equity_data = df_res[['Close Date', 'Cumulative P&L']].set_index('Close Date')
+    st.line_chart(equity_data)
+    
+    st.markdown("---")
+
+    # NEW: TICKER LEADERBOARD SECTION
+    st.subheader("🏆 Ticker Leaderboard")
+    tick_col1, tick_col2 = st.columns(2)
+    
+    ticker_stats = df_res.groupby('Ticker').agg(
+        Total_PNL=('Net Change', 'sum'),
+        Trade_Count=('Ticker', 'count'),
+        Avg_ROI=('ROI %', 'mean')
+    ).reset_index()
+    
+    ticker_stats['Profit_Per_Trade'] = ticker_stats['Total_PNL'] / ticker_stats['Trade_Count']
+
+    with tick_col1:
+        st.markdown("**Top 5 Profit Makers (Best Friends)**")
+        top_5 = ticker_stats.sort_values('Total_PNL', ascending=False).head(5)
+        st.dataframe(top_5[['Ticker', 'Total_PNL', 'Trade_Count']].style.format({'Total_PNL': '${:,.2f}'}), hide_index=True)
+
+    with tick_col2:
+        st.markdown("**Top 5 Loss Makers (Account Killers)**")
+        bottom_5 = ticker_stats.sort_values('Total_PNL', ascending=True).head(5)
+        st.dataframe(bottom_5[['Ticker', 'Total_PNL', 'Trade_Count']].style.format({'Total_PNL': '${:,.2f}'}), hide_index=True)
+
+    st.markdown("---")
+
+    # ANALYTICS TABS
+    t1, t2 = st.tabs(["📊 Strategy Matrix", "📋 Detailed Log"])
+    
+    with t1:
+        col_s1, col_s2 = st.columns([2, 1])
+        with col_s1:
+            st.markdown("### Performance by Strategy Type")
+            strat_stats = df_res.groupby('Strategy').agg(
+                Total_PNL=('Net Change', 'sum'),
+                Win_Rate=('Net Change', lambda x: (x > 0).mean() * 100),
+                Avg_ROI=('ROI %', 'mean'),
+                Trades=('Ticker', 'count')
+            ).sort_values('Total_PNL', ascending=False)
+            st.table(strat_stats.style.format({'Total_PNL': '${:,.2f}', 'Win_Rate': '{:.1f}%', 'Avg_ROI': '{:.1f}%'}))
+            
+        with col_s2:
+            st.markdown("### ⚖️ Risk Coach")
+            avg_loss = abs(df_res[df_res['Net Change'] < 0]['Net Change'].mean())
+            if pd.isna(avg_loss): avg_loss = 0
+            st.write(f"Your Avg Loss: **${avg_loss:,.2f}**")
+            risk_input = st.number_input("Desired Risk per Trade ($)", value=float(round(avg_loss, 0)) if avg_loss > 0 else 100.0)
+            st.success(f"**Actionable Advice:** Limit total capital per trade to **${risk_input * 10:,.0f}**.")
+
+        # RECOMMENDATIONS
+        st.markdown("---")
+        st.markdown("### 💡 Behavioral Coaching")
+        # Find the ticker with the most trades but negative P&L
+        bad_habit_ticker = ticker_stats[ticker_stats['Total_PNL'] < 0].sort_values('Trade_Count', ascending=False).head(1)
+        
+        if not bad_habit_ticker.empty:
+            ticker_name = bad_habit_ticker.iloc[0]['Ticker']
+            st.warning(f"**Overtrading Alert:** You have traded **{ticker_name}** {int(bad_habit_ticker.iloc[0]['Trade_Count'])} times but have a net loss of ${abs(bad_habit_ticker.iloc[0]['Total_PNL']):,.2f}. Consider taking a break from this ticker.")
+        
+        if total_pnl > 0:
+            st.success(f"Keep it up! Your best ticker is **{ticker_stats.sort_values('Total_PNL', ascending=False).iloc[0]['Ticker']}**.")
+
+    with t2:
+        st.dataframe(df_res.drop(columns=['Asset Category', 'Status', 'Cumulative P&L']), width='stretch')
+
+    # Download
+    csv_out = df_res.to_csv(index=False).encode('utf-8')
+    st.download_button("📥 Export Analysis", csv_out, "Trader_Edge_Analysis.csv", "text/csv")
