@@ -43,7 +43,6 @@ def get_core_desc(row):
 
 @st.cache_data(ttl=3600)
 def fetch_dynamic_article(query):
-    """Fetches the #1 trending article from Google News based on the specific trading gap."""
     try:
         url = f"https://news.google.com/rss/search?q={urllib.parse.quote(query)}"
         req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
@@ -133,6 +132,10 @@ def render_dashboard_view(df_subset, category_name):
         return
 
     df_subset['Days Held'] = pd.to_numeric(df_subset['Days Held'], errors='coerce')
+    df_subset['Buy DoW'] = pd.to_datetime(df_subset['Buy Date']).dt.day_name()
+    df_subset['Is_Put'] = df_subset['Contract Description'].str.contains('Put', case=False, na=False)
+    df_subset['Is_Call'] = df_subset['Contract Description'].str.contains('Call', case=False, na=False)
+    df_subset['Trade Style'] = np.where(df_subset['Days Held'] == 0, 'Day Trade', 'Swing Trade')
 
     total_pnl = df_subset['Net Change'].sum()
     total_trades = len(df_subset)
@@ -143,40 +146,58 @@ def render_dashboard_view(df_subset, category_name):
     losing_trades = len(losers)
     win_rate = (winning_trades / (winning_trades + losing_trades)) * 100 if (winning_trades + losing_trades) > 0 else 0
     
+    # Calculate Overall ROI
+    total_cost_basis = df_subset['Total Buy'].sum()
+    overall_roi = (total_pnl / total_cost_basis * 100) if total_cost_basis > 0 else 0
+    
     col1, col2, col3, col4 = st.columns(4)
     col1.metric("Total Net Profit/Loss", f"${total_pnl:,.2f}")
     col2.metric("Win Rate", f"{win_rate:.1f}%")
-    col3.metric("Trades with Profit", winning_trades)
+    col3.metric("Avg Trade ROI", f"{overall_roi:.1f}%")
     col4.metric("Total Trades", total_trades)
     
     st.markdown("---")
 
-    st.markdown(f"### 💡 {category_name} - Highlights")
-    ticker_stats = df_subset.groupby('Ticker').agg(
-        Net_Profit=('Net Change', 'sum'),
-        Trade_Count=('Ticker', 'count')
-    ).reset_index()
+    # --- NEW EXPERT ANALYTICS ---
+    st.markdown(f"### 🔬 Deep Dive: {category_name} Analytics")
+    
+    ana_col1, ana_col2, ana_col3 = st.columns(3)
+    
+    # 1. Day vs Swing Trading
+    dt_df = df_subset[df_subset['Trade Style'] == 'Day Trade']
+    sw_df = df_subset[df_subset['Trade Style'] == 'Swing Trade']
+    dt_pnl = dt_df['Net Change'].sum()
+    sw_pnl = sw_df['Net Change'].sum()
+    
+    with ana_col1:
+        st.markdown("**Trade Style Performance**")
+        st.write(f"📈 **Swing Trades (>0 Days):** ${sw_pnl:,.2f} ({len(sw_df)} trades)")
+        st.write(f"⚡ **Day Trades (0 Days):** ${dt_pnl:,.2f} ({len(dt_df)} trades)")
 
-    if not ticker_stats.empty:
-        top_traded = ticker_stats.loc[ticker_stats['Trade_Count'].idxmax()]
-        top_profit = ticker_stats.loc[ticker_stats['Net_Profit'].idxmax()]
-        top_loss = ticker_stats.loc[ticker_stats['Net_Profit'].idxmin()]
-        
-        col_in1, col_in2, col_in3 = st.columns(3)
-        col_in1.metric("🔥 Most Traded Ticker", f"{top_traded['Ticker']}", f"{int(top_traded['Trade_Count'])} Trades", delta_color="off")
-        
-        if top_profit['Net_Profit'] > 0:
-            col_in2.metric("🏆 Top Profit Maker", f"{top_profit['Ticker']}", f"${top_profit['Net_Profit']:,.2f}")
-        else:
-            col_in2.metric("🏆 Top Profit Maker", "None", "$0.00")
-            
-        if top_loss['Net_Profit'] < 0:
-            col_in3.metric("📉 Biggest Loss Maker", f"{top_loss['Ticker']}", f"${top_loss['Net_Profit']:,.2f}")
-        else:
-            col_in3.metric("📉 Biggest Loss Maker", "No Losses!", "$0.00", delta_color="off")
+    # 2. Call vs Put Performance
+    call_df = df_subset[df_subset['Is_Call'] == True]
+    put_df = df_subset[df_subset['Is_Put'] == True]
+    call_pnl = call_df['Net Change'].sum()
+    put_pnl = put_df['Net Change'].sum()
+    
+    with ana_col2:
+        st.markdown("**Call vs. Put Focus**")
+        st.write(f"🐂 **Calls Net P&L:** ${call_pnl:,.2f}")
+        st.write(f"🐻 **Puts Net P&L:** ${put_pnl:,.2f}")
+
+    # 3. Day of Week Analysis
+    dow_stats = df_subset.groupby('Buy DoW').agg(Net_Profit=('Net Change', 'sum')).reset_index()
+    if not dow_stats.empty:
+        best_day = dow_stats.loc[dow_stats['Net_Profit'].idxmax()]
+        worst_day = dow_stats.loc[dow_stats['Net_Profit'].idxmin()]
+        with ana_col3:
+            st.markdown("**Entry Day of Week**")
+            st.write(f"✅ **Best Day to Enter:** {best_day['Buy DoW']} (${best_day['Net_Profit']:,.0f})")
+            st.write(f"❌ **Worst Day to Enter:** {worst_day['Buy DoW']} (${worst_day['Net_Profit']:,.0f})")
 
     st.markdown("---")
 
+    # --- TRADE BEHAVIOR & EFFICIENCY ---
     st.markdown(f"### 🧠 Trade Behavior & Efficiency")
     avg_win = winners['Net Change'].mean() if not winners.empty else 0
     avg_loss = losers['Net Change'].mean() if not losers.empty else 0
@@ -218,42 +239,51 @@ def render_dashboard_view(df_subset, category_name):
     else:
         col_b3.metric("🎯 Most Reliable Ticker", "Need more data", "Min 3 trades required", delta_color="off")
 
-    st.markdown("### 🛠️ Actionable Recommendations & Learning")
-    
-    recommendations = []
-    
-    if risk_reward > 0 and risk_reward < 1.0:
-        article = fetch_dynamic_article("how to improve trading risk reward ratio strategy")
-        recommendations.append(f"🚨 **Risk/Reward Warning:** Your average loss is larger than your average win. \n\n* **Action:** Consider setting tighter stop-losses to cut losers faster. \n* **Trending Read:** {article}")
-    elif risk_reward >= 1.5:
-        article = fetch_dynamic_article("how to use trailing stop loss to maximize trading profits")
-        recommendations.append(f"✅ **Excellent Risk/Reward:** Your winners are significantly outperforming your losers! \n\n* **Action:** Consider using trailing stop-losses to protect these larger gains. \n* **Trending Read:** {article}")
+    # --- ACTIONABLE RECOMMENDATIONS & LEARNING ---
+    if category_name != "Covered Call":
+        st.markdown("### 🛠️ Actionable Recommendations & Learning")
+        recommendations = []
         
-    if avg_days_loss > avg_days_win and avg_days_win > 0:
-        article = fetch_dynamic_article("trading psychology cutting losses short")
-        recommendations.append(f"📉 **Bag Holding Alert:** You hold onto losing trades longer than winning trades, tying up capital. \n\n* **Action:** Try implementing a strict 'time-stop' (e.g., if a trade doesn't move in your favor after a few days, cut it). \n* **Trending Read:** {article}")
-    elif avg_days_win > avg_days_loss and avg_days_loss > 0:
-        recommendations.append("📈 **Great Holding Discipline:** You are cutting losers faster than you close winners. Keep trusting your early exit indicators on losing setups.")
-        
-    if win_rate < 40 and total_trades >= 5:
-        article = fetch_dynamic_article("how to improve trading win rate setup criteria")
-        recommendations.append(f"⚠️ **Low Win Rate:** With a win rate below 40%, you might be forcing trades. \n\n* **Action:** Review your entry criteria. Trade less frequently and wait for A+ setups. \n* **Trending Read:** {article}")
-        
-    if not eligible_tickers.empty and best_ticker_wr['Win_Rate'] >= 0.7:
-        article = fetch_dynamic_article("position sizing strategy in stock options trading")
-        recommendations.append(f"⭐ **Double Down on {best_ticker_wr.name}:** You have a highly successful track record ({best_ticker_wr['Win_Rate'] * 100:.0f}% win rate) trading **{best_ticker_wr.name}**. \n\n* **Action:** Consider scaling up your position sizing on A+ setups for this specific ticker. \n* **Trending Read:** {article}")
+        # Style Insights
+        if dt_pnl < 0 and sw_pnl > 0 and len(dt_df) >= 3:
+            article = fetch_dynamic_article("day trading vs swing trading stock options")
+            recommendations.append(f"⚠️ **Day Trading Leak:** Your Swing Trades are profitable, but your 0DTE Day Trades are losing money (${dt_pnl:,.0f}). \n\n* **Action:** Consider banning 0DTE trades from your strategy to instantly boost your bottom line. \n* **Trending Read:** {article}")
 
-    if recommendations:
-        for rec in recommendations:
-            if "Warning" in rec or "Alert" in rec or "Low" in rec:
-                st.warning(rec)
-            else:
-                st.success(rec)
-    else:
-        st.info("Keep trading! Once you have more data, advanced behavioral recommendations and live trending articles will appear here.")
+        # Directional Bias Insights
+        if call_pnl > 0 and put_pnl < 0 and len(put_df) >= 3:
+            article = fetch_dynamic_article("how to trade put options effectively")
+            recommendations.append(f"🐻 **Bear Trap:** You are successfully making money longing the market (Calls), but losing money shorting it (Puts: ${put_pnl:,.0f}). \n\n* **Action:** Stop trying to catch falling knives. Focus entirely on bullish setups until your put strategy improves. \n* **Trending Read:** {article}")
 
+        # Day of Week Insight
+        if not dow_stats.empty and worst_day['Net_Profit'] < 0:
+            article = fetch_dynamic_article("best days of the week to trade options")
+            recommendations.append(f"📅 **Toxic Trading Day:** Trades opened on **{worst_day['Buy DoW']}s** are currently your biggest drag on performance. \n\n* **Action:** Review your {worst_day['Buy DoW']} trades. Are you forcing entries before the weekend? \n* **Trending Read:** {article}")
+        
+        # Core Insights
+        if risk_reward > 0 and risk_reward < 1.0:
+            article = fetch_dynamic_article("how to improve trading risk reward ratio strategy")
+            recommendations.append(f"🚨 **Risk/Reward Warning:** Your average loss is larger than your average win. \n\n* **Action:** Consider setting tighter stop-losses to cut losers faster. \n* **Trending Read:** {article}")
+            
+        if avg_days_loss > avg_days_win and avg_days_win > 0:
+            article = fetch_dynamic_article("trading psychology cutting losses short")
+            recommendations.append(f"📉 **Bag Holding Alert:** You hold onto losing trades longer than winning trades, tying up capital. \n\n* **Action:** Try implementing a strict 'time-stop' (e.g., if a trade doesn't move in your favor after a few days, cut it). \n* **Trending Read:** {article}")
+            
+        if win_rate < 40 and total_trades >= 5:
+            article = fetch_dynamic_article("how to improve trading win rate setup criteria")
+            recommendations.append(f"⚠️ **Low Win Rate:** With a win rate below 40%, you might be forcing trades. \n\n* **Action:** Review your entry criteria. Trade less frequently and wait for A+ setups. \n* **Trending Read:** {article}")
+
+        if recommendations:
+            for rec in recommendations:
+                if "Warning" in rec or "Alert" in rec or "Leak" in rec or "Toxic" in rec or "Trap" in rec or "Low" in rec:
+                    st.warning(rec)
+                else:
+                    st.success(rec)
+        else:
+            st.info("Keep trading! Once you have more data, advanced behavioral recommendations will appear here.")
+        
     st.markdown("---")
     
+    # --- MONTHLY SUMMARY ---
     st.markdown(f"### 📅 {category_name} - Monthly Summary")
     df_temp = df_subset.copy()
     df_temp['Sell_DT'] = pd.to_datetime(df_temp['Sell Date'], errors='coerce')
@@ -265,9 +295,6 @@ def render_dashboard_view(df_subset, category_name):
     if not valid_dates.empty:
         valid_dates['Month'] = valid_dates['Month_Date'].dt.strftime('%B %Y')
         valid_dates['Month_Sort'] = valid_dates['Month_Date'].dt.to_period('M')
-        
-        valid_dates['Is_Put'] = valid_dates['Contract Description'].str.contains('Put', case=False, na=False)
-        valid_dates['Is_Call'] = valid_dates['Contract Description'].str.contains('Call', case=False, na=False)
         
         monthly_summary = valid_dates.groupby(['Month_Sort', 'Month']).agg(
             Total_Trades=('Ticker', 'count'),
@@ -298,21 +325,19 @@ def render_dashboard_view(df_subset, category_name):
             st.bar_chart(chart_data)
             
         with col_chart2:
-            if category_name == "All Data":
-                st.markdown("#### Trades by Category")
-                cat_counts = df_subset['Asset Category'].value_counts()
-                st.bar_chart(cat_counts)
-            else:
-                st.markdown("#### Win vs Loss Ratio")
-                wl_data = pd.DataFrame({'Count': [winning_trades, losing_trades]}, index=['Wins', 'Losses'])
-                st.bar_chart(wl_data)
+            st.markdown("#### P&L by Entry Day of Week")
+            dow_chart_data = dow_stats.set_index('Buy DoW')
+            # Sort days logically
+            days_order = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday']
+            dow_chart_data = dow_chart_data.reindex(days_order).dropna()
+            st.bar_chart(dow_chart_data)
     else:
         st.info("Not enough dated transactions to generate monthly tracking.")
 
     st.markdown("---")
     
     st.markdown(f"### 📋 {category_name} - Trade Details")
-    display_df = df_temp.drop(columns=['Sell_DT', 'Buy_DT', 'Month_Date', 'Month', 'Month_Sort', 'Is_Put', 'Is_Call', 'Status'], errors='ignore')
+    display_df = df_temp.drop(columns=['Sell_DT', 'Buy_DT', 'Month_Date', 'Month', 'Month_Sort', 'Is_Put', 'Is_Call', 'Status', 'Trade Style'], errors='ignore')
     st.dataframe(display_df, width='stretch')
 
 
@@ -320,7 +345,6 @@ def render_dashboard_view(df_subset, category_name):
 st.set_page_config(page_title="Robinhood P&L Dashboard", layout="wide")
 
 st.sidebar.markdown("## About the Creator")
-# --- UPDATED TEXT HERE ---
 st.sidebar.markdown("This tool was built to automate Robinhood options and stock P&L tracking, specifically optimized for options trading.")
 st.sidebar.markdown("---")
 st.sidebar.markdown("👨‍💻 **Created by Puneeth Rao**")
@@ -336,7 +360,7 @@ with st.expander("ℹ️ How to get your Robinhood CSV"):
     2. Go directly to your [Reports and Statements page](https://robinhood.com/account/reports) (or click **Account** > **Reports and Statements**).
     3. Under **Account History**, click **Export as CSV**.
     
-    **From the Mobile App ([iOS](https://apps.apple.com/us/app/robinhood-investing-for-all/id938003185) / [Android](https://play.google.com/store/apps/details?id=com.robinhood.android)):**
+    **From the Mobile App:**
     1. Tap your **Profile** icon in the bottom right corner.
     2. Tap the **Menu** (three lines) in the top left corner.
     3. Tap **Investing**.
@@ -352,34 +376,41 @@ if uploaded_file is not None:
             df_result = process_robinhood_csv(uploaded_file)
             df_result['Net Change'] = pd.to_numeric(df_result['Net Change'], errors='coerce').fillna(0)
             
+            # Remove Open trades
             open_options_mask = df_result['Asset Category'].isin(['Option', 'Covered Call']) & (df_result['Status'] == 'Open')
             df_result = df_result[~open_options_mask]
             
-            available_categories = sorted(df_result['Asset Category'].unique().tolist())
-            tab_names = ["All Data"] + available_categories
+            # EXCLUSIVELY FILTER FOR OPTIONS AND COVERED CALLS
+            df_result = df_result[df_result['Asset Category'].isin(['Option', 'Covered Call'])]
             
-            tabs = st.tabs(tab_names)
-            
-            for i, tab in enumerate(tabs):
-                with tab:
-                    if tab_names[i] == "All Data":
-                        render_dashboard_view(df_result, "All Data")
-                    else:
-                        cat = tab_names[i]
-                        render_dashboard_view(df_result[df_result['Asset Category'] == cat].copy(), cat)
-            
-            st.markdown("---")
-            
-            st.markdown("### Export Full Report")
-            df_export = df_result.drop(columns=['Status'], errors='ignore')
-            csv_data = df_export.to_csv(index=False).encode('utf-8')
-            
-            st.download_button(
-                label="📥 Download Processed CSV File (Completed Trades)",
-                data=csv_data,
-                file_name="Robinhood_PL_Summary.csv",
-                mime="text/csv"
-            )
+            if df_result.empty:
+                st.warning("No completed options or covered call trades found in this file.")
+            else:
+                available_categories = sorted(df_result['Asset Category'].unique().tolist())
+                tab_names = ["All Data"] + available_categories
+                
+                tabs = st.tabs(tab_names)
+                
+                for i, tab in enumerate(tabs):
+                    with tab:
+                        if tab_names[i] == "All Data":
+                            render_dashboard_view(df_result, "All Data")
+                        else:
+                            cat = tab_names[i]
+                            render_dashboard_view(df_result[df_result['Asset Category'] == cat].copy(), cat)
+                
+                st.markdown("---")
+                
+                st.markdown("### Export Full Report")
+                df_export = df_result.drop(columns=['Status'], errors='ignore')
+                csv_data = df_export.to_csv(index=False).encode('utf-8')
+                
+                st.download_button(
+                    label="📥 Download Processed CSV File (Completed Trades)",
+                    data=csv_data,
+                    file_name="Robinhood_PL_Summary.csv",
+                    mime="text/csv"
+                )
             
         except Exception as e:
             st.error(f"An error occurred while processing the file: {e}")
