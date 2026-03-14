@@ -37,9 +37,10 @@ def clean_quantity(val):
 def get_asset_type(row):
     trans = str(row['Trans Code'])
     desc = str(row['Description']).upper()
-    if any(x in desc for x in [' CALL ', ' PUT ', ' CALL $', ' PUT $']):
+    if any(x in desc for x in [' CALL ', ' PUT ']):
+        if trans == 'STO': return 'Covered Call'
         return 'Option'
-    return 'Stock'
+    return 'Other'
 
 def get_core_desc(row):
     desc = str(row['Description'])
@@ -73,18 +74,14 @@ def process_robinhood_csv(uploaded_file):
     df['Asset Type'] = df.apply(get_asset_type, axis=1)
     df['Core_Description'] = df.apply(get_core_desc, axis=1)
 
-    trade_codes = ['BTO', 'STC', 'STO', 'BTC', 'Buy', 'Sell', 'OEXP']
+    trade_codes = ['BTO', 'STC', 'STO', 'BTC', 'OEXP']
     trades = df[df['Trans Code'].isin(trade_codes)].copy()
     trades = trades.sort_values(['Instrument', 'Core_Description', 'Activity Date'])
 
     summary_rows = []
     for (ticker, core_desc), group in trades.groupby(['Instrument', 'Core_Description']):
-        buys = group[group['Trans Code'].isin(['BTO', 'Buy', 'BTC'])]
-        sells = group[group['Trans Code'].isin(['STC', 'Sell', 'STO', 'OEXP'])]
-        
-        total_buy_qty = buys['Quantity_Clean'].sum()
-        total_buy_amt = abs(buys[buys['Amount_Clean'] < 0]['Amount_Clean'].sum())
-        total_sell_amt = sells[sells['Amount_Clean'] > 0]['Amount_Clean'].sum()
+        buys = group[group['Trans Code'].isin(['BTO', 'BTC'])]
+        sells = group[group['Trans Code'].isin(['STC', 'STO', 'OEXP'])]
         
         net_change = group['Amount_Clean'].sum()
         buy_date = buys['Activity Date'].min() if not buys.empty else np.nan
@@ -92,8 +89,10 @@ def process_robinhood_csv(uploaded_file):
         status = 'Closed' if pd.notna(buy_date) and pd.notna(sell_date) else 'Open'
 
         summary_rows.append({
-            'Ticker': ticker, 'Contract Description': core_desc, '# Cons': total_buy_qty if total_buy_qty > 0 else sells['Quantity_Clean'].sum(),
-            'Total Buy': round(total_buy_amt, 2), 'Total Sell': round(total_sell_amt, 2),
+            'Ticker': ticker, 'Contract Description': core_desc, 
+            '# Cons': buys['Quantity_Clean'].sum() if not buys.empty else sells['Quantity_Clean'].sum(),
+            'Total Buy': abs(buys[buys['Amount_Clean'] < 0]['Amount_Clean'].sum()),
+            'Total Sell': sells[sells['Amount_Clean'] > 0]['Amount_Clean'].sum(),
             'Net Change': round(net_change, 2), 'Buy Date': buy_date, 'Sell Date': sell_date,
             'Asset Category': group['Asset Type'].iloc[0], 'Status': status
         })
@@ -105,23 +104,24 @@ def render_dashboard_view(df_subset, category_name):
         st.info("No completed trades found.")
         return
 
+    # Calculations for Deep Dive
     df_closed['Days Held'] = (df_closed['Sell Date'] - df_closed['Buy Date']).dt.days
+    df_closed['Trade Style'] = np.where(df_closed['Days Held'] == 0, 'Day Trade', 'Swing Trade')
     df_closed['Is_Call'] = df_closed['Contract Description'].str.contains('Call', case=False, na=False)
     df_closed['Buy DoW'] = df_closed['Buy Date'].dt.day_name()
     
     total_pnl = df_closed['Net Change'].sum()
-    win_rate = (len(df_closed[df_closed['Net Change'] > 0]) / len(df_closed)) * 100
     
-    col1, col2, col3, col4 = st.columns(4)
-    col1.metric("Total Net P/L", f"${total_pnl:,.2f}")
-    col2.metric("Win Rate", f"{win_rate:.1f}%")
-    col3.metric("Avg Trade P/L", f"${total_pnl/len(df_closed):,.2f}")
-    col4.metric("Total Trades", len(df_closed))
-    
+    m1, m2, m3, m4 = st.columns(4)
+    m1.metric("Total Net P/L", f"${total_pnl:,.2f}")
+    m2.metric("Win Rate", f"{(len(df_closed[df_closed['Net Change'] > 0]) / len(df_closed)) * 100:.1f}%")
+    m3.metric("Avg Trade P/L", f"${total_pnl/len(df_closed):,.2f}")
+    m4.metric("Trades Count", len(df_closed))
+
     st.markdown("---")
-    
-    # 1. PERFORMANCE ANALYTICS: TOP/BOTTOM 5
-    st.markdown("### 📊 Performance Analytics: Top & Bottom 5")
+
+    # 1. PERFORMANCE ANALYTICS
+    st.markdown("### 📊 Performance Analytics")
     ticker_stats = df_closed.groupby('Ticker').agg(
         Net_Profit=('Net Change', 'sum'),
         Avg_Win=('Net Change', lambda x: x[x > 0].mean() if not x[x > 0].empty else 0),
@@ -138,46 +138,34 @@ def render_dashboard_view(df_subset, category_name):
 
     st.markdown("---")
 
-    # 2. MARKET INTEL: DYNAMIC OPTIONS INTELLIGENCE
-    st.markdown("### 📡 Market Intel: Dynamic Intelligence")
-    top_ticker = ticker_stats['Net_Profit'].idxmax()
-    worst_ticker = ticker_stats['Net_Profit'].idxmin()
-
-    rec_col1, rec_col2 = st.columns(2)
-    with rec_col1:
-        st.success(f"🔥 **Leading Asset:** {top_ticker}")
-        st.write(f"Latest News: {fetch_dynamic_intel(top_ticker)}")
-    with rec_col2:
-        st.error(f"⚠️ **Major Drag:** {worst_ticker}")
-        st.write(f"Market Context: {fetch_dynamic_intel(worst_ticker)}")
+    # 2. DEEP DIVE: RESTORED MISSING METRICS
+    st.markdown(f"### 🔬 Deep Dive: {category_name} Intelligence")
+    ana_col1, ana_col2, ana_col3 = st.columns(3)
+    with ana_col1:
+        st.markdown("**Style Performance**")
+        st.write(f"📈 **Swing Net:** ${df_closed[df_closed['Trade Style'] == 'Swing Trade']['Net Change'].sum():,.2f}")
+        st.write(f"⚡ **Day Net:** ${df_closed[df_closed['Trade Style'] == 'Day Trade']['Net Change'].sum():,.2f}")
+    with ana_col2:
+        st.markdown("**Directional Bias**")
+        st.write(f"🐂 **Calls Net:** ${df_closed[df_closed['Is_Call']]['Net Change'].sum():,.2f}")
+        st.write(f"🐻 **Puts Net:** ${df_closed[~df_closed['Is_Call']]['Net Change'].sum():,.2f}")
+    with ana_col3:
+        st.markdown("**Timing & Efficiency**")
+        dow = df_closed.groupby('Buy DoW')['Net Change'].sum()
+        st.write(f"✅ **Best Day:** {dow.idxmax()}")
+        st.write(f"⏱️ **Avg Days Held:** {df_closed['Days Held'].mean():.1f} Days")
 
     st.markdown("---")
 
-    # 3. DEEP DIVE: STRATEGIC INSIGHTS
-    st.markdown("### 🔬 Deep Dive: Actionable Insights")
-    avg_p_l = total_pnl / len(df_closed)
-    call_pnl = df_closed[df_closed['Is_Call']]['Net Change'].sum()
-    put_pnl = df_closed[~df_closed['Is_Call']]['Net Change'].sum()
-    dow_stats = df_closed.groupby('Buy DoW')['Net Change'].sum()
-
-    ana_col1, ana_col2, ana_col3 = st.columns(3)
-    with ana_col1:
-        st.markdown("**Core Efficiency**")
-        st.write(f"💵 **Avg P/L per Trade:** ${avg_p_l:,.2f}")
-        st.caption("Signifies your 'expected value' for every position opened.")
-    with ana_col2:
-        st.markdown("**Call vs Put Performance**")
-        st.write(f"🐂 **Calls Net:** ${call_pnl:,.2f}")
-        st.write(f"🐻 **Puts Net:** ${put_pnl:,.2f}")
-    with ana_col3:
-        st.markdown("**Entry Timing**")
-        st.write(f"✅ **Best Day:** {dow_stats.idxmax() if not dow_stats.empty else 'N/A'}")
-        st.write(f"❌ **Worst Day:** {dow_stats.idxmin() if not dow_stats.empty else 'N/A'}")
+    # 3. DYNAMIC INTEL
+    st.markdown("### 📡 Market Intelligence")
+    top_t = ticker_stats['Net_Profit'].idxmax()
+    st.success(f"🔥 **Leading Asset:** {top_t} | Latest News: {fetch_dynamic_intel(top_t)}")
 
     st.markdown("---")
 
     # 4. MONTHLY CALENDAR
-    st.markdown("### 📅 Monthly P&L Journal")
+    st.markdown("### 📅 Monthly Journal")
     df_closed['Month_Str'] = df_closed['Buy Date'].dt.strftime('%B %Y')
     selected_month = st.selectbox("Select Month", df_closed['Month_Str'].unique(), key=f"cal_{category_name}")
     cal_data = df_closed[df_closed['Month_Str'] == selected_month].copy()
@@ -185,7 +173,6 @@ def render_dashboard_view(df_subset, category_name):
     year, month_idx = cal_data['Buy Date'].iloc[0].year, cal_data['Buy Date'].iloc[0].month
     matrix = calendar.monthcalendar(int(year), int(month_idx))
     cal_df = pd.DataFrame(matrix, columns=['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'])
-    
     styled_cal = cal_df.map(lambda d: f"{d}\n${daily_pnl.get(d, 0):,.0f}" if d != 0 and daily_pnl.get(d, 0) != 0 else (str(d) if d != 0 else ""))
     def color_pnl(val):
         if "$" not in str(val): return 'text-align: center;'
@@ -198,9 +185,8 @@ st.set_page_config(page_title="Robinhood Dashboard", layout="wide", page_icon="�
 st.title("📈 Interactive Robinhood Options Dashboard")
 
 st.sidebar.title("📊 Account Insights")
-st.sidebar.markdown("[🔗 View My LinkedIn Profile](https://www.linkedin.com/in/puneeth-rao-9154b511/)")
+st.sidebar.markdown("[🔗 LinkedIn Profile](https://www.linkedin.com/in/puneeth-rao-9154b511/)")
 
-# Global Search Bar
 search_query = st.sidebar.text_input("🔍 Search Ticker or Contract", "").strip().upper()
 st.sidebar.markdown("---")
 
@@ -208,11 +194,22 @@ uploaded_file = st.file_uploader("Upload Robinhood CSV", type=["csv"])
 
 if uploaded_file:
     df_raw = process_robinhood_csv(uploaded_file)
+    df_raw = df_raw[df_raw['Asset Category'] != 'Other'] # Filters out Stocks
+    
     if search_query:
         df_raw = df_raw[df_raw['Ticker'].str.contains(search_query, na=False) | df_raw['Contract Description'].str.contains(search_query, na=False)]
     
-    st.sidebar.metric("Active Options Contracts", len(df_raw[df_raw['Status'] == 'Open']))
+    st.sidebar.metric("Open Positions", len(df_raw[df_raw['Status'] == 'Open']))
     st.sidebar.markdown("👨‍💻 **Puneeth Rao**")
 
-    df_options = df_raw[df_raw['Asset Category'] == 'Option']
-    render_dashboard_view(df_options, "Options")
+    t1, t2, t3, t4 = st.tabs(["All Data", "Options", "Covered Calls", "Trade Log"])
+    
+    with t1: render_dashboard_view(df_raw, "Portfolio")
+    with t2: render_dashboard_view(df_raw[df_raw['Asset Category'] == 'Option'], "Options")
+    with t3: render_dashboard_view(df_raw[df_raw['Asset Category'] == 'Covered Call'], "Covered Calls")
+    with t4:
+        st.subheader("📋 Trade Log")
+        # --- DOWNLOAD BUTTON ---
+        csv = df_raw.to_csv(index=False).encode('utf-8')
+        st.download_button("📥 Download Log as CSV", data=csv, file_name="trade_log.csv", mime="text/csv")
+        st.dataframe(df_raw, use_container_width=True)
