@@ -147,4 +147,110 @@ def render_dashboard_view(df_subset, category_name):
     col1, col2, col3, col4 = st.columns(4)
     col1.metric("Total Net Profit/Loss", f"${total_pnl:,.2f}")
     col2.metric("Win Rate", f"{win_rate:.1f}%")
-    col3.metric("Avg Trade ROI", f"{overall
+    col3.metric("Avg Trade ROI", f"{overall_roi:.1f}%")
+    col4.metric("Total Trades", total_trades)
+    
+    st.markdown("---")
+
+    st.markdown(f"### 🔬 Deep Dive: {category_name} Analytics")
+    ana_col1, ana_col2, ana_col3 = st.columns(3)
+    dt_df, sw_df = df_subset[df_subset['Trade Style'] == 'Day Trade'], df_subset[df_subset['Trade Style'] == 'Swing Trade']
+    with ana_col1:
+        st.markdown("**Trade Style Performance**")
+        st.write(f"📈 **Swing Trades:** ${sw_df['Net Change'].sum():,.2f} ({len(sw_df)} trades)")
+        st.write(f"⚡ **Day Trades:** ${dt_df['Net Change'].sum():,.2f} ({len(dt_df)} trades)")
+
+    call_pnl = df_subset[df_subset['Is_Call'] == True]['Net Change'].sum()
+    put_pnl = df_subset[df_subset['Is_Put'] == True]['Net Change'].sum()
+    with ana_col2:
+        st.markdown("**Call vs. Put Focus**")
+        st.write(f"🐂 **Calls Net P&L:** ${call_pnl:,.2f}")
+        st.write(f"🐻 **Puts Net P&L:** ${put_pnl:,.2f}")
+
+    dow_stats = df_subset.groupby('Buy DoW').agg(Net_Profit=('Net Change', 'sum')).reset_index()
+    if not dow_stats.empty:
+        best_day = dow_stats.loc[dow_stats['Net_Profit'].idxmax()]
+        worst_day = dow_stats.loc[dow_stats['Net_Profit'].idxmin()]
+        with ana_col3:
+            st.markdown("**Entry Day of Week**")
+            st.write(f"✅ **Best Day:** {best_day['Buy DoW']} (${best_day['Net_Profit']:,.0f})")
+            st.write(f"❌ **Worst Day:** {worst_day['Buy DoW']} (${worst_day['Net_Profit']:,.0f})")
+
+    st.markdown("---")
+    st.markdown(f"### 🧠 Trade Behavior & Efficiency")
+    avg_win = winners['Net Change'].mean() if not winners.empty else 0
+    avg_loss = losers['Net Change'].mean() if not losers.empty else 0
+    risk_reward = abs(avg_win / avg_loss) if avg_loss != 0 else 0
+    col_b1, col_b2, col_b3 = st.columns(3)
+    col_b1.metric("⚖️ Avg Win vs. Avg Loss", f"${avg_win:,.0f} / ${abs(avg_loss):,.0f}", f"Ratio: {risk_reward:.2f}x")
+    
+    st.markdown("---")
+    st.markdown(f"### 📅 {category_name} - Monthly Calendar")
+    df_temp = df_subset.copy()
+    df_temp['Month_Date'] = pd.to_datetime(df_temp['Sell Date'], errors='coerce').fillna(pd.to_datetime(df_temp['Buy Date'], errors='coerce'))
+    valid_dates = df_temp.dropna(subset=['Month_Date']).copy()
+    
+    if not valid_dates.empty:
+        valid_dates['Month'] = valid_dates['Month_Date'].dt.strftime('%B %Y')
+        valid_dates['Month_Sort'] = valid_dates['Month_Date'].dt.to_period('M')
+        monthly_summary = valid_dates.groupby(['Month_Sort', 'Month']).agg(
+            Total_Trades=('Ticker', 'count'), Wins=('Net Change', lambda x: (x > 0).sum()),
+            Net_Profit=('Net Change', 'sum'), Unique_Tickers=('Ticker', 'nunique'),
+            Puts=('Is_Put', 'sum'), Calls=('Is_Call', 'sum')
+        ).reset_index().sort_values('Month_Sort', ascending=False)
+        
+        st.dataframe(monthly_summary.drop(columns=['Month_Sort']).rename(columns={'Wins': 'Profit Trades', 'Net_Profit': 'Total P&L'}), width='stretch')
+
+        st.markdown("#### Monthly Day-by-Day Audit")
+        selected_month = st.selectbox(f"Select Month to View Calendar ({category_name})", monthly_summary['Month'].tolist(), key=f"cal_{category_name}")
+        
+        cal_data = valid_dates[valid_dates['Month'] == selected_month].copy()
+        daily_pnl = cal_data.groupby(cal_data['Month_Date'].dt.day)['Net Change'].sum().to_dict()
+        
+        year = int(cal_data['Month_Date'].iloc[0].year)
+        month_idx = int(cal_data['Month_Date'].iloc[0].month)
+        month_cal = calendar.monthcalendar(year, month_idx)
+        
+        cal_df = pd.DataFrame(month_cal, columns=['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'])
+        
+        def format_cell(day):
+            if day == 0: return ""
+            pnl = daily_pnl.get(day, 0)
+            if pnl == 0: return f"{day}"
+            return f"{day}: ${pnl:,.0f}"
+
+        # FIX: Changed .applymap to .map
+        styled_cal = cal_df.map(format_cell)
+        
+        def color_pnl(val):
+            if ":" not in str(val): return ''
+            try:
+                pnl_val = float(val.split('$')[1].replace(',', ''))
+                if pnl_val > 0: return 'background-color: #d4edda; color: #155724; font-weight: bold'
+                if pnl_val < 0: return 'background-color: #f8d7da; color: #721c24; font-weight: bold'
+            except: pass
+            return ''
+
+        # FIX: Changed .style.applymap to .style.map
+        st.table(styled_cal.style.map(color_pnl))
+        
+    st.markdown("---")
+    st.markdown(f"### 📋 {category_name} - Trade Details")
+    st.dataframe(df_temp.drop(columns=['Month_Date'], errors='ignore'), width='stretch')
+
+# --- STREAMLIT UI ---
+st.set_page_config(page_title="Robinhood P&L Dashboard", layout="wide")
+st.sidebar.markdown("👨‍💻 **Created by Puneeth Rao**")
+st.sidebar.markdown("🔗 [Connect with me on LinkedIn](https://www.linkedin.com/in/puneeth-rao/)")
+st.title("📈 Interactive Robinhood P&L Dashboard")
+uploaded_file = st.file_uploader("Upload Robinhood CSV", type=["csv"])
+
+if uploaded_file is not None:
+    df_result = process_robinhood_csv(uploaded_file)
+    df_result = df_result[df_result['Asset Category'].isin(['Option', 'Covered Call'])]
+    available_categories = sorted(df_result['Asset Category'].unique().tolist())
+    tab_names = ["All Data"] + available_categories
+    tabs = st.tabs(tab_names)
+    for i, tab in enumerate(tabs):
+        with tab:
+            render_dashboard_view(df_result if tab_names[i] == "All Data" else df_result[df_result['Asset Category'] == tab_names[i]], tab_names[i])
