@@ -10,10 +10,10 @@ import calendar
 # Set calendar to start on Sunday
 calendar.setfirstweekday(calendar.SUNDAY)
 
-# --- CSS FOR CALENDAR (SCOPED) & TOOLTIPS ---
+# --- CSS FOR CALENDAR, SYMMETRY, AND CUSTOM TOOLTIPS ---
 st.markdown("""
     <style>
-    /* SCOPED CALENDAR STYLING - Won't break other tables */
+    /* SCOPED CALENDAR STYLING */
     .cal-table { 
         width: 100%; 
         border-radius: 10px; 
@@ -57,11 +57,48 @@ st.markdown("""
         border: 1px solid rgba(128, 128, 128, 0.2);
         margin-bottom: 25px;
     }
-    .metric-hover {
-        cursor: help;
-        border-bottom: 1px dotted rgba(128, 128, 128, 0.5);
+    
+    /* CUSTOM TOOLTIP STYLING */
+    .custom-tooltip {
+        position: relative;
         display: inline-block;
+        border-bottom: 1px dotted rgba(128, 128, 128, 0.6);
+        cursor: help;
         margin-bottom: 8px;
+    }
+    .custom-tooltip .tooltiptext {
+        visibility: hidden;
+        width: 240px;
+        background-color: #2b2b2b;
+        color: #ffffff;
+        text-align: center;
+        border: 1px solid rgba(255,255,255,0.2);
+        border-radius: 6px;
+        padding: 8px;
+        position: absolute;
+        z-index: 1000;
+        bottom: 130%;
+        left: 50%;
+        margin-left: -120px;
+        opacity: 0;
+        transition: opacity 0.3s;
+        font-size: 12px;
+        font-weight: normal;
+        box-shadow: 0px 4px 6px rgba(0,0,0,0.3);
+    }
+    .custom-tooltip .tooltiptext::after {
+        content: "";
+        position: absolute;
+        top: 100%;
+        left: 50%;
+        margin-left: -5px;
+        border-width: 5px;
+        border-style: solid;
+        border-color: #2b2b2b transparent transparent transparent;
+    }
+    .custom-tooltip:hover .tooltiptext {
+        visibility: visible;
+        opacity: 1;
     }
     </style>
     """, unsafe_allow_html=True)
@@ -127,6 +164,9 @@ def process_robinhood_csv(uploaded_file):
         })
     return pd.DataFrame(summary_rows)
 
+def format_centered_df(df):
+    return df.style.format("${:,.2f}").set_properties(**{'text-align': 'center'}).set_table_styles([{'selector': 'th', 'props': [('text-align', 'center')]}])
+
 def render_dashboard_view(df_subset, category_name):
     df_closed = df_subset[df_subset['Status'] == 'Closed'].copy()
     if df_closed.empty:
@@ -146,7 +186,7 @@ def render_dashboard_view(df_subset, category_name):
 
         st.markdown("---")
 
-        # 1. TICKER PERFORMANCE (NATIVE ST.DATAFRAME FOR AUTO ROW HEIGHT)
+        # 1. TICKER PERFORMANCE (CENTERED)
         st.markdown("### 📊 Ticker Edge Intelligence")
         ticker_stats = df_closed.groupby('Ticker').agg(
             Net_Profit=('Net Change', 'sum'),
@@ -164,17 +204,17 @@ def render_dashboard_view(df_subset, category_name):
             st.subheader("🏆 Top 5 by Expectancy")
             st.markdown("*Ranked by mathematical edge per trade.*")
             top_5 = ticker_stats.sort_values(by='Expectancy', ascending=False).head(5)[['Expectancy', 'Net_Profit']]
-            st.dataframe(top_5.style.format("${:,.2f}"), use_container_width=True)
+            st.dataframe(format_centered_df(top_5), use_container_width=True)
         with col_t2:
             st.subheader("📉 Bottom 5 by Expectancy")
             st.markdown("*Tickers where the math is working against you.*")
             bot_5 = ticker_stats.sort_values(by='Expectancy', ascending=True).head(5)[['Expectancy', 'Net_Profit']]
-            bot_5 = bot_5.rename(columns={'Net_Profit': 'Net Loss'}) # RENAMED HERE
-            st.dataframe(bot_5.style.format("${:,.2f}"), use_container_width=True)
+            bot_5 = bot_5.rename(columns={'Net_Profit': 'Net Loss'}) 
+            st.dataframe(format_centered_df(bot_5), use_container_width=True)
 
         st.markdown("---")
 
-        # 2. DEEP DIVE: PORTFOLIO INTELLIGENCE
+        # 2. DEEP DIVE: PORTFOLIO INTELLIGENCE (CUSTOM CSS HOVER TOOLTIPS)
         st.markdown("### 🔬 Portfolio Intelligence")
         
         daily_perf = df_closed.groupby(df_closed['Buy Date'].dt.date)['Net Change'].sum()
@@ -186,23 +226,23 @@ def render_dashboard_view(df_subset, category_name):
         d_col1, d_col2, d_col3 = st.columns(3)
         with d_col1:
             st.markdown("**Profitability Metrics**")
-            st.markdown(f'<div class="metric-hover" title="The average dollar amount gained on every winning trade.">🟢 <b>Avg $ Win:</b> ${wins["Net Change"].mean() if not wins.empty else 0:,.2f}</div>', unsafe_allow_html=True)
-            st.markdown(f'<div class="metric-hover" title="The average dollar amount lost on every losing trade.">🔴 <b>Avg $ Loss:</b> ${losses["Net Change"].mean() if not losses.empty else 0:,.2f}</div>', unsafe_allow_html=True)
-            st.markdown(f'<div class="metric-hover" title="Ratio of gross profit to gross loss. Above 1.5 indicates a strong statistical edge.">📊 <b>Profit Factor:</b> {profit_factor:.2f}</div>', unsafe_allow_html=True)
+            st.markdown(f'<div class="custom-tooltip">🟢 <b>Avg $ Win:</b> ${wins["Net Change"].mean() if not wins.empty else 0:,.2f}<span class="tooltiptext">The average dollar amount gained on every winning trade.</span></div>', unsafe_allow_html=True)
+            st.markdown(f'<div class="custom-tooltip">🔴 <b>Avg $ Loss:</b> ${losses["Net Change"].mean() if not losses.empty else 0:,.2f}<span class="tooltiptext">The average dollar amount lost on every losing trade.</span></div>', unsafe_allow_html=True)
+            st.markdown(f'<div class="custom-tooltip">📊 <b>Profit Factor:</b> {profit_factor:.2f}<span class="tooltiptext">Ratio of gross profit to gross loss. Above 1.5 indicates a strong statistical edge.</span></div>', unsafe_allow_html=True)
         with d_col2:
             st.markdown("**Directional Totals**")
-            st.markdown(f'<div class="metric-hover" title="Cumulative profit/loss from all Call options.">🐂 <b>Total Calls $:</b> ${df_closed[df_closed["Is_Call"]]["Net Change"].sum():,.2f}</div>', unsafe_allow_html=True)
-            st.markdown(f'<div class="metric-hover" title="Cumulative profit/loss from all Put options.">🐻 <b>Total Puts $:</b> ${df_closed[~df_closed["Is_Call"]]["Net Change"].sum():,.2f}</div>', unsafe_allow_html=True)
-            st.markdown(f'<div class="metric-hover" title="Total net profit divided by total capital invested.">📈 <b>Total ROI %:</b> {total_roi:.1f}%</div>', unsafe_allow_html=True)
+            st.markdown(f'<div class="custom-tooltip">🐂 <b>Total Calls $:</b> ${df_closed[df_closed["Is_Call"]]["Net Change"].sum():,.2f}<span class="tooltiptext">Cumulative profit/loss from all Call options.</span></div>', unsafe_allow_html=True)
+            st.markdown(f'<div class="custom-tooltip">🐻 <b>Total Puts $:</b> ${df_closed[~df_closed["Is_Call"]]["Net Change"].sum():,.2f}<span class="tooltiptext">Cumulative profit/loss from all Put options.</span></div>', unsafe_allow_html=True)
+            st.markdown(f'<div class="custom-tooltip">📈 <b>Total ROI %:</b> {total_roi:.1f}%<span class="tooltiptext">Total net profit divided by total capital invested.</span></div>', unsafe_allow_html=True)
         with d_col3:
             st.markdown("**Risk Intelligence**")
-            st.markdown(f'<div class="metric-hover" title="The single most negative P/L day in your selected history.">💀 <b>Worst Day:</b> ${worst_day_val:,.2f}</div>', unsafe_allow_html=True)
+            st.markdown(f'<div class="custom-tooltip">💀 <b>Worst Day:</b> ${worst_day_val:,.2f}<span class="tooltiptext">The single most negative P/L day in your selected history.</span></div>', unsafe_allow_html=True)
             st.caption(f"Date: {worst_day_date}")
-            st.markdown(f'<div class="metric-hover" title="The average time elapsed between opening and closing a position.">⏱️ <b>Avg Days Held:</b> {df_closed["Days Held"].mean():.1f} Days</div>', unsafe_allow_html=True)
+            st.markdown(f'<div class="custom-tooltip">⏱️ <b>Avg Days Held:</b> {df_closed["Days Held"].mean():.1f} Days<span class="tooltiptext">The average time elapsed between opening and closing a position.</span></div>', unsafe_allow_html=True)
 
         st.markdown("---")
 
-        # 3. MONTHLY CALENDAR (CUSTOM HTML TO REMOVE INDEX COLUMN & FIX WIDTH)
+        # 3. MONTHLY CALENDAR (CUSTOM HTML)
         st.markdown("### 📅 Monthly P&L Journal")
         df_closed['Month_Str'] = df_closed['Buy Date'].dt.strftime('%B %Y')
         selected_month = st.selectbox("Select Month", df_closed['Month_Str'].unique(), key=f"cal_{category_name}")
@@ -241,7 +281,7 @@ def render_dashboard_view(df_subset, category_name):
         
         st.markdown(cal_html, unsafe_allow_html=True)
 
-    # --- 4. TRADE LOG & DOWNLOAD BUTTON RE-ADDED ---
+    # --- 4. TRADE LOG & DOWNLOAD BUTTON ---
     st.markdown("---")
     st.subheader(f"📋 {category_name} Trade Log")
     csv = df_subset.to_csv(index=False).encode('utf-8')
@@ -269,7 +309,7 @@ if uploaded_file:
         df_raw = df_raw[df_raw['Ticker'].str.contains(search_query, na=False)]
     
     open_options_count = len(df_raw[(df_raw['Status'] == 'Open') & (df_raw['Asset Category'] == 'Option')])
-    st.sidebar.metric("Open Option Positions", open_options_count, help="Total number of distinct Option contracts currently open.")
+    st.sidebar.metric("Open Option Positions", open_options_count)
     
     st.sidebar.markdown("---")
     st.sidebar.markdown("👨‍💻 **Puneeth Rao** | [🔗 LinkedIn](https://www.linkedin.com/in/puneeth-rao-9154b511/)")
