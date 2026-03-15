@@ -10,7 +10,7 @@ import calendar
 # Set calendar to start on Sunday
 calendar.setfirstweekday(calendar.SUNDAY)
 
-# --- CSS FOR SYMMETRY, DARK MODE & EQUAL CALENDAR COLUMNS ---
+# --- CSS FOR SYMMETRY, DARK MODE & FIXED GRID ---
 st.markdown("""
     <style>
     .stTable { 
@@ -30,22 +30,23 @@ st.markdown("""
     }
     td { 
         text-align: center !important; 
-        height: 100px; 
+        height: 110px; 
         vertical-align: middle !important; 
         font-size: 14px; 
         border: 1px solid rgba(128, 128, 128, 0.1) !important;
         width: 14.28%;
     }
+    /* CALENDAR CELL CONTENT */
     .cal-cell {
         display: flex;
         flex-direction: column;
         justify-content: space-between;
-        height: 90px;
-        padding: 2px;
+        height: 100px;
+        padding: 5px;
     }
     .cal-date { align-self: flex-start; font-weight: bold; font-size: 13px; opacity: 0.5; }
-    .cal-pnl { align-self: center; font-size: 17px; font-weight: 900; margin-top: -5px; }
-    .cal-trades { align-self: center; font-size: 10px; font-weight: 600; opacity: 0.7; }
+    .cal-pnl { align-self: center; font-size: 18px; font-weight: 900; }
+    .cal-trades { align-self: center; font-size: 11px; font-weight: 600; opacity: 0.7; }
     
     .instruction-box {
         background-color: rgba(128, 128, 128, 0.05);
@@ -53,6 +54,14 @@ st.markdown("""
         border-radius: 15px;
         border: 1px solid rgba(128, 128, 128, 0.2);
         margin-bottom: 25px;
+    }
+    
+    /* TOOLTIP STYLING FOR DEEP DIVE */
+    .metric-hover {
+        cursor: help;
+        border-bottom: 1px dotted rgba(128, 128, 128, 0.5);
+        display: inline-block;
+        margin-bottom: 8px;
     }
     </style>
     """, unsafe_allow_html=True)
@@ -87,22 +96,6 @@ def get_core_desc(row):
         if match: return match.group(1).strip()
     return desc.strip()
 
-@st.cache_data(ttl=3600)
-def fetch_dynamic_intel(ticker):
-    try:
-        url = f"https://news.google.com/rss/search?q={urllib.parse.quote(ticker + ' stock options analysis')}"
-        req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
-        with urllib.request.urlopen(req, timeout=3) as response:
-            xml_data = response.read()
-        root = ET.fromstring(xml_data)
-        item = root.find('.//channel/item')
-        if item is not None:
-            title = item.find('title').text
-            link = item.find('link').text
-            return f"[{title.split(' - ')[0]}]({link})"
-    except: pass
-    return f"[Analyze {ticker} Volatility](https://www.google.com/search?q={urllib.parse.quote(ticker + ' implied volatility')})"
-
 # --- CORE PROCESSING ---
 def process_robinhood_csv(uploaded_file):
     df = pd.read_csv(uploaded_file, on_bad_lines='skip')
@@ -127,7 +120,6 @@ def process_robinhood_csv(uploaded_file):
 
         summary_rows.append({
             'Ticker': ticker, 'Contract Description': core_desc, 
-            '# Cons': buys['Quantity_Clean'].sum() if not buys.empty else sells['Quantity_Clean'].sum(),
             'Total Buy': abs(buys[buys['Amount_Clean'] < 0]['Amount_Clean'].sum()),
             'Total Sell': sells[sells['Amount_Clean'] > 0]['Amount_Clean'].sum(),
             'Net Change': round(net_change, 2), 'Buy Date': buy_date, 'Sell Date': sell_date,
@@ -140,7 +132,7 @@ def render_dashboard_view(df_subset, category_name):
     if df_closed.empty:
         st.info("No completed trades found.")
     else:
-        # Metrics Calculations
+        # Calculations
         df_closed['Days Held'] = (df_closed['Sell Date'] - df_closed['Buy Date']).dt.days
         df_closed['Is_Call'] = df_closed['Contract Description'].str.contains('Call', case=False, na=False)
         total_pnl = df_closed['Net Change'].sum()
@@ -155,68 +147,60 @@ def render_dashboard_view(df_subset, category_name):
 
         st.markdown("---")
 
-        # 1. PERFORMANCE ANALYTICS
-        st.markdown("### 📊 Ticker Performance")
+        # 1. TICKER PERFORMANCE (NET EXPECTANCY)
+        st.markdown("### 📊 Ticker Edge Intelligence")
         ticker_stats = df_closed.groupby('Ticker').agg(
             Net_Profit=('Net Change', 'sum'),
+            Total_Trades=('Net Change', 'count'),
+            Wins=('Net Change', lambda x: (x > 0).sum()),
             Avg_Win=('Net Change', lambda x: x[x > 0].mean() if not x[x > 0].empty else 0),
             Avg_Loss=('Net Change', lambda x: x[x < 0].mean() if not x[x < 0].empty else 0)
         ).fillna(0)
+        
+        ticker_stats['Win_Rate'] = ticker_stats['Wins'] / ticker_stats['Total_Trades']
+        ticker_stats['Expectancy'] = (ticker_stats['Win_Rate'] * ticker_stats['Avg_Win']) + ((1 - ticker_stats['Win_Rate']) * ticker_stats['Avg_Loss'])
 
-        p_col1, p_col2 = st.columns(2)
-        with p_col1:
-            st.subheader("🏆 Top 5 Winners")
-            st.table(ticker_stats.sort_values(by='Net_Profit', ascending=False).head(5)[['Net_Profit', 'Avg_Win']].style.format("${:,.2f}"))
-        with p_col2:
-            st.subheader("📉 Bottom 5 Losers")
-            st.table(ticker_stats.sort_values(by='Net_Profit', ascending=True).head(5)[['Net_Profit', 'Avg_Loss']].style.format("${:,.2f}"))
-
-        st.markdown("---")
-
-        # 2. RECOMMENDATIONS
-        st.markdown("### 📡 Intelligence & Strategy")
-        top_t = ticker_stats['Net_Profit'].idxmax()
-        worst_t = ticker_stats['Net_Profit'].idxmin()
-        intel_col1, intel_col2 = st.columns(2)
-        with intel_col1:
-            st.success(f"🔥 **Strength Lead:** {top_t}")
-            st.write(f"News: {fetch_dynamic_intel(top_t)}")
-        with intel_col2:
-            st.error(f"⚠️ **Efficiency Gap:** {worst_t}")
-            st.write(f"News: {fetch_dynamic_intel(worst_t)}")
+        col_t1, col_t2 = st.columns(2)
+        with col_t1:
+            st.subheader("🏆 Top 5 by Expectancy")
+            st.markdown("*Ranked by mathematical edge per trade.*")
+            st.table(ticker_stats.sort_values(by='Expectancy', ascending=False).head(5)[['Expectancy', 'Net_Profit']].style.format("${:,.2f}"))
+        with col_t2:
+            st.subheader("📉 Bottom 5 by Expectancy")
+            st.markdown("*Tickers where the math is working against you.*")
+            st.table(ticker_stats.sort_values(by='Expectancy', ascending=True).head(5)[['Expectancy', 'Net_Profit']].style.format("${:,.2f}"))
 
         st.markdown("---")
 
-        # 3. DEEP DIVE: PORTFOLIO INTELLIGENCE
-        st.markdown(f"### 🔬 Deep Dive: {category_name} Intelligence")
+        # 2. DEEP DIVE: PORTFOLIO INTELLIGENCE (WITH HOVER DEFS)
+        st.markdown("### 🔬 Portfolio Intelligence")
         
         daily_perf = df_closed.groupby(df_closed['Buy Date'].dt.date)['Net Change'].sum()
         worst_day_val = daily_perf.min() if not daily_perf.empty else 0
         worst_day_date = daily_perf.idxmin().strftime('%m/%d/%Y') if not daily_perf.empty else "N/A"
-        
-        profit_factor = (wins['Net Change'].sum() / abs(losses['Net Change'].sum())) if not losses.empty else wins['Net Change'].sum()
+        profit_factor = wins['Net Change'].sum() / abs(losses['Net Change'].sum()) if not losses.empty else 0
         total_roi = (total_pnl / df_closed['Total Buy'].sum() * 100) if df_closed['Total Buy'].sum() > 0 else 0
-
+        
         d_col1, d_col2, d_col3 = st.columns(3)
         with d_col1:
             st.markdown("**Profitability Metrics**")
-            st.write(f"🟢 **Avg $ Per Win:** ${wins['Net Change'].mean():,.2f}" if not wins.empty else "N/A")
-            st.write(f"🔴 **Avg $ Per Loss:** ${losses['Net Change'].mean():,.2f}" if not losses.empty else "N/A")
-            st.write(f"📊 **Profit Factor:** {profit_factor:.2f}")
+            st.markdown(f'<div class="metric-hover" title="The average dollar amount gained on every winning trade.">🟢 <b>Avg $ Win:</b> ${wins["Net Change"].mean() if not wins.empty else 0:,.2f}</div>', unsafe_allow_html=True)
+            st.markdown(f'<div class="metric-hover" title="The average dollar amount lost on every losing trade.">🔴 <b>Avg $ Loss:</b> ${losses["Net Change"].mean() if not losses.empty else 0:,.2f}</div>', unsafe_allow_html=True)
+            st.markdown(f'<div class="metric-hover" title="Ratio of gross profit to gross loss. Above 1.5 indicates a strong statistical edge.">📊 <b>Profit Factor:</b> {profit_factor:.2f}</div>', unsafe_allow_html=True)
         with d_col2:
             st.markdown("**Directional Totals**")
-            st.write(f"🐂 **Total Calls $:** ${df_closed[df_closed['Is_Call']]['Net Change'].sum():,.2f}")
-            st.write(f"🐻 **Total Puts $:** ${df_closed[~df_closed['Is_Call']]['Net Change'].sum():,.2f}")
-            st.write(f"📈 **Total ROI %:** {total_roi:.1f}%")
+            st.markdown(f'<div class="metric-hover" title="Cumulative profit/loss from all Call options.">🐂 <b>Total Calls $:</b> ${df_closed[df_closed["Is_Call"]]["Net Change"].sum():,.2f}</div>', unsafe_allow_html=True)
+            st.markdown(f'<div class="metric-hover" title="Cumulative profit/loss from all Put options.">🐻 <b>Total Puts $:</b> ${df_closed[~df_closed["Is_Call"]]["Net Change"].sum():,.2f}</div>', unsafe_allow_html=True)
+            st.markdown(f'<div class="metric-hover" title="Total net profit divided by total capital invested.">📈 <b>Total ROI %:</b> {total_roi:.1f}%</div>', unsafe_allow_html=True)
         with d_col3:
             st.markdown("**Risk Intelligence**")
-            st.write(f"💀 **Worst Trading Day:** ${worst_day_val:,.2f}")
+            st.markdown(f'<div class="metric-hover" title="The single most negative P/L day in your selected history.">💀 <b>Worst Day:</b> ${worst_day_val:,.2f}</div>', unsafe_allow_html=True)
             st.caption(f"Date: {worst_day_date}")
-            st.write(f"⏱️ **Avg Days Held:** {df_closed['Days Held'].mean():.1f} Days")
+            st.markdown(f'<div class="metric-hover" title="The average time elapsed between opening and closing a position.">⏱️ <b>Avg Days Held:</b> {df_closed["Days Held"].mean():.1f} Days</div>', unsafe_allow_html=True)
 
         st.markdown("---")
 
-        # 4. MONTHLY CALENDAR (SYMMETRICAL)
+        # 3. MONTHLY CALENDAR (FIXED SYMMETRY)
         st.markdown("### 📅 Monthly P&L Journal")
         df_closed['Month_Str'] = df_closed['Buy Date'].dt.strftime('%B %Y')
         selected_month = st.selectbox("Select Month", df_closed['Month_Str'].unique(), key=f"cal_{category_name}")
@@ -235,39 +219,22 @@ def render_dashboard_view(df_subset, category_name):
             trade_str = f"{stats['Count']} Trades" if stats['Count'] > 0 else ""
             return f'<div class="cal-cell"><div class="cal-date">{day}</div><div class="cal-pnl">{pnl_str}</div><div class="cal-trades">{trade_str}</div></div>'
 
-        styled_cal = cal_df.map(format_cell)
-        
-        def color_cells(val):
-            if "$" not in val: return ''
-            try:
-                amt = float(re.search(r'\$(-?[\d,]+)', val).group(1).replace(',', ''))
-                return f"background-color: {'rgba(40, 167, 69, 0.25)' if amt > 0 else 'rgba(220, 53, 69, 0.25)'};"
-            except: return ''
+        st.write(cal_df.map(format_cell).style.map(lambda val: f"background-color: {'rgba(40, 167, 69, 0.25)' if '$' in val and '-' not in val else ('rgba(220, 53, 69, 0.25)' if '$-' in val else '')};").to_html(escape=False), unsafe_allow_html=True)
 
-        st.write(styled_cal.style.map(color_cells).to_html(escape=False), unsafe_allow_html=True)
-
-    # --- 5. TRADE LOG (BOTTOM) ---
+    # --- 4. TRADE LOG ---
     st.markdown("---")
     st.subheader(f"📋 {category_name} Trade Log")
-    csv = df_subset.to_csv(index=False).encode('utf-8')
-    st.download_button("📥 Download Log", data=csv, file_name=f"{category_name.lower()}_log.csv", mime="text/csv", key=f"dl_{category_name}")
     st.dataframe(df_subset, use_container_width=True)
 
 # --- STREAMLIT UI ---
-st.set_page_config(page_title="Robinhood Dashboard", layout="wide", page_icon="📈")
-
-# 🏷️ TITLE
+st.set_page_config(page_title="Trade Intelligence", layout="wide", page_icon="📈")
 st.header("🎯 Trade Intelligence Dashboard")
 
 # Instructions
-st.markdown("""
-<div class="instruction-box">
-    Go to <b><a href="https://robinhood.com/account/reports" target="_blank" style="color:#00d395">Robinhood Reports</a></b>, export <b>Account Activity</b> as CSV, and upload here.
-</div>
-""", unsafe_allow_html=True)
+st.markdown("""<div class="instruction-box">Go to <b><a href="https://robinhood.com/account/reports" target="_blank" style="color:#00d395">Robinhood Reports</a></b>, export <b>Account Activity</b> as CSV, and upload here.</div>""", unsafe_allow_html=True)
 
 # Sidebar
-st.sidebar.subheader("🔍 Search")
+st.sidebar.subheader("🔍 Filter")
 search_query = st.sidebar.text_input("Ticker Search", "").strip().upper()
 st.sidebar.markdown("---")
 
@@ -279,10 +246,12 @@ if uploaded_file:
     if search_query:
         df_raw = df_raw[df_raw['Ticker'].str.contains(search_query, na=False)]
     
-    st.sidebar.metric("Open Positions", len(df_raw[df_raw['Status'] == 'Open']))
+    # EXACT OPTIONS FILTER FOR OPEN POSITIONS
+    open_options_count = len(df_raw[(df_raw['Status'] == 'Open') & (df_raw['Asset Category'] == 'Option')])
+    st.sidebar.metric("Open Option Positions", open_options_count, help="Total number of distinct Option contracts currently open (excludes Covered Calls).")
+    
     st.sidebar.markdown("---")
-    st.sidebar.markdown("👨‍💻 **Puneeth Rao**")
-    st.sidebar.markdown("[🔗 LinkedIn Profile](https://www.linkedin.com/in/puneeth-rao-9154b511/)")
+    st.sidebar.markdown("👨‍💻 **Puneeth Rao** | [🔗 LinkedIn](https://www.linkedin.com/in/puneeth-rao-9154b511/)")
 
     t1, t2, t3 = st.tabs(["Portfolio Overview", "Options", "Covered Calls"])
     with t1: render_dashboard_view(df_raw, "Portfolio")
