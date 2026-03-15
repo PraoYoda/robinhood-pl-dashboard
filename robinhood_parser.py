@@ -10,7 +10,7 @@ import calendar
 # Set calendar to start on Sunday
 calendar.setfirstweekday(calendar.SUNDAY)
 
-# --- CSS FOR DARK MODE & CALENDAR SYMMETRY ---
+# --- CSS FOR DARK MODE & PRO-TRADER CALENDAR ---
 st.markdown("""
     <style>
     .stTable { 
@@ -22,22 +22,35 @@ st.markdown("""
     th { 
         text-align: center !important; 
         background-color: rgba(128, 128, 128, 0.1) !important; 
-        color: inherit !important;
         font-weight: bold; 
         padding: 10px !important;
     }
-    /* CALENDAR CELL STYLING */
+    /* ENHANCED CALENDAR LAYOUT */
     .cal-cell {
         display: flex;
         flex-direction: column;
         justify-content: space-between;
-        height: 85px;
+        height: 100px;
         padding: 5px;
-        font-size: 12px;
     }
-    .cal-date { align-self: flex-start; font-weight: bold; opacity: 0.6; }
-    .cal-pnl { align-self: center; font-size: 16px; font-weight: 800; margin-top: 5px; }
-    .cal-trades { align-self: center; font-size: 10px; opacity: 0.8; margin-bottom: 2px; }
+    .cal-date { 
+        align-self: flex-start; 
+        font-weight: bold; 
+        font-size: 14px;
+        opacity: 0.6; 
+    }
+    .cal-pnl { 
+        align-self: center; 
+        font-size: 18px; 
+        font-weight: 800; 
+        margin-top: -10px;
+    }
+    .cal-trades { 
+        align-self: center; 
+        font-size: 11px; 
+        font-weight: 600;
+        opacity: 0.8; 
+    }
     
     [data-testid="stMetricValue"] { font-size: 1.8rem !important; }
     .instruction-box {
@@ -80,6 +93,22 @@ def get_core_desc(row):
         if match: return match.group(1).strip()
     return desc.strip()
 
+@st.cache_data(ttl=3600)
+def fetch_dynamic_intel(ticker):
+    try:
+        url = f"https://news.google.com/rss/search?q={urllib.parse.quote(ticker + ' stock options analysis')}"
+        req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
+        with urllib.request.urlopen(req, timeout=3) as response:
+            xml_data = response.read()
+        root = ET.fromstring(xml_data)
+        item = root.find('.//channel/item')
+        if item is not None:
+            title = item.find('title').text
+            link = item.find('link').text
+            return f"[{title.split(' - ')[0]}]({link})"
+    except: pass
+    return f"[Analyze {ticker} Market](https://www.google.com/search?q={urllib.parse.quote(ticker + ' options flow')})"
+
 # --- CORE PROCESSING ---
 def process_robinhood_csv(uploaded_file):
     df = pd.read_csv(uploaded_file, on_bad_lines='skip')
@@ -119,14 +148,12 @@ def render_dashboard_view(df_subset, category_name):
     else:
         # Metrics Calculations
         df_closed['Days Held'] = (df_closed['Sell Date'] - df_closed['Buy Date']).dt.days
-        df_closed['Is_Call'] = df_closed['Contract Description'].str.contains('Call', case=False, na=False)
         total_pnl = df_closed['Net Change'].sum()
         wins = df_closed[df_closed['Net Change'] > 0]
         losses = df_closed[df_closed['Net Change'] < 0]
         avg_win = wins['Net Change'].mean() if not wins.empty else 0
         avg_loss = losses['Net Change'].mean() if not losses.empty else 0
         
-        # Dashboard Top Metrics
         m1, m2, m3, m4 = st.columns(4)
         m1.metric("Total Net P/L", f"${total_pnl:,.2f}")
         m2.metric("Win Rate", f"{(len(wins) / len(df_closed)) * 100:.1f}%")
@@ -153,21 +180,37 @@ def render_dashboard_view(df_subset, category_name):
 
         st.markdown("---")
 
-        # 2. DEEP DIVE: PORTFOLIO INTELLIGENCE (NEW METRICS ADDED)
+        # 2. MARKET INTELLIGENCE & RECOMMENDATIONS
+        st.markdown("### 📡 Market Intelligence & Recommendations")
+        top_t = ticker_stats['Net_Profit'].idxmax()
+        worst_t = ticker_stats['Net_Profit'].idxmin()
+        
+        intel_col1, intel_col2 = st.columns(2)
+        with intel_col1:
+            st.success(f"🔥 **Strength Lead:** {top_t}")
+            st.write(f"News Insight: {fetch_dynamic_intel(top_t)}")
+            st.write("**Strategy:** Your edge is clearest here. Consider scaling this ticker's position size.")
+        with intel_col2:
+            st.error(f"⚠️ **Efficiency Gap:** {worst_t}")
+            st.write(f"News Insight: {fetch_dynamic_intel(worst_t)}")
+            st.write(f"**Action:** Tighten stops on {worst_t} to prevent outsized losses.")
+
+        st.markdown("---")
+
+        # 3. DEEP DIVE: PORTFOLIO INTELLIGENCE (NEW METRICS)
         st.markdown(f"### 🔬 Deep Dive: {category_name} Intelligence")
         
-        # Calculate Worst Day
         daily_perf = df_closed.groupby(df_closed['Buy Date'].dt.date)['Net Change'].sum()
         worst_day = daily_perf.min()
         worst_day_date = daily_perf.idxmin().strftime('%m/%d/%Y') if not daily_perf.empty else "N/A"
         
         d_col1, d_col2, d_col3 = st.columns(3)
         with d_col1:
-            st.markdown("**Profitability Logic**")
-            st.write(f"🟢 **Avg $ Per Win:** ${avg_win:,.2f}")
-            st.write(f"🔴 **Avg $ Per Loss:** ${avg_loss:,.2f}")
+            st.markdown("**Core Profitability**")
+            st.write(f"💵 **Avg $ per Win:** ${avg_win:,.2f}")
+            st.write(f"💸 **Avg $ per Loss:** ${avg_loss:,.2f}")
         with d_col2:
-            st.markdown("**Risk Exposure**")
+            st.markdown("**Risk Intelligence**")
             st.write(f"💀 **Worst Trading Day:** ${worst_day:,.2f}")
             st.caption(f"Occurred on {worst_day_date}")
         with d_col3:
@@ -177,7 +220,7 @@ def render_dashboard_view(df_subset, category_name):
 
         st.markdown("---")
 
-        # 3. MONTHLY CALENDAR (NEW FORMATTING)
+        # 4. MONTHLY CALENDAR (NEW PRO-LAYOUT)
         st.markdown("### 📅 Monthly P&L Journal")
         df_closed['Month_Str'] = df_closed['Buy Date'].dt.strftime('%B %Y')
         selected_month = st.selectbox("Select Month", df_closed['Month_Str'].unique(), key=f"cal_{category_name}")
@@ -196,12 +239,8 @@ def render_dashboard_view(df_subset, category_name):
             if day == 0: return ""
             stats = daily_stats.get(day, {'PNL': 0, 'Count': 0})
             pnl_val = stats['PNL']
-            count_val = stats['Count']
-            
             pnl_str = f"${pnl_val:,.0f}" if pnl_val != 0 else ""
-            trade_str = f"{count_val} Trades" if count_val > 0 else ""
-            
-            # HTML for cell content
+            trade_str = f"{stats['Count']} Trades" if stats['Count'] > 0 else ""
             return f"""
             <div class="cal-cell">
                 <div class="cal-date">{day}</div>
@@ -214,17 +253,15 @@ def render_dashboard_view(df_subset, category_name):
         
         def color_cal(val):
             if "$" not in val: return 'text-align: center;'
-            # Extract PNL for color logic
             try:
-                amt_str = re.search(r'\$(-?[\d,]+)', val).group(1).replace(',', '')
-                amt = float(amt_str)
+                amt = float(re.search(r'\$(-?[\d,]+)', val).group(1).replace(',', ''))
                 color = 'rgba(40, 167, 69, 0.25)' if amt > 0 else 'rgba(220, 53, 69, 0.25)'
                 return f"background-color: {color};"
             except: return ''
 
         st.write(styled_cal.style.map(color_cal).to_html(escape=False), unsafe_allow_html=True)
 
-    # --- 4. TRADE LOG (BOTTOM) ---
+    # --- 5. TRADE LOG (BOTTOM) ---
     st.markdown("---")
     st.subheader(f"📋 {category_name} Trade Log")
     csv = df_subset.to_csv(index=False).encode('utf-8')
@@ -238,13 +275,11 @@ def render_dashboard_view(df_subset, category_name):
 # --- STREAMLIT UI ---
 st.set_page_config(page_title="Robinhood Dashboard", layout="wide", page_icon="📈")
 
-# Instructions Box
+# Instructions
 st.markdown("""
 <div class="instruction-box">
     <h3>📥 Robinhood Data Export</h3>
-    <p>1. Go to <b><a href="https://robinhood.com/account/reports" target="_blank" style="color:#00d395">Robinhood Reports</a></b><br>
-    2. Export <b>Account Activity</b> as CSV (not PDF statement)<br>
-    3. Upload the file below to analyze your edge.</p>
+    <p>Go to <b><a href="https://robinhood.com/account/reports" target="_blank" style="color:#00d395">Robinhood Reports</a></b>, export <b>Account Activity</b> as CSV, and upload here.</p>
 </div>
 """, unsafe_allow_html=True)
 
@@ -263,7 +298,7 @@ if uploaded_file:
     
     st.sidebar.metric("Open Positions", len(df_raw[df_raw['Status'] == 'Open']))
     
-    # Signature
+    # Signature at Bottom
     st.sidebar.markdown("---")
     st.sidebar.markdown("👨‍💻 **Puneeth Rao**")
     st.sidebar.markdown("[🔗 LinkedIn Profile](https://www.linkedin.com/in/puneeth-rao-9154b511/)")
