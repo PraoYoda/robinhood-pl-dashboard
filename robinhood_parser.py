@@ -10,33 +10,35 @@ import calendar
 # Set calendar to start on Sunday
 calendar.setfirstweekday(calendar.SUNDAY)
 
-# --- CSS FOR SYMMETRY, DARK MODE & FIXED GRID ---
+# --- CSS FOR CALENDAR (SCOPED) & TOOLTIPS ---
 st.markdown("""
     <style>
-    .stTable { 
+    /* SCOPED CALENDAR STYLING - Won't break other tables */
+    .cal-table { 
         width: 100%; 
         border-radius: 10px; 
         overflow: hidden; 
         border: 1px solid rgba(128, 128, 128, 0.2);
         table-layout: fixed; 
+        border-collapse: collapse;
     }
-    th { 
+    .cal-table th { 
         text-align: center !important; 
         background-color: rgba(128, 128, 128, 0.1) !important; 
         color: inherit !important;
         font-weight: bold; 
         padding: 10px !important;
         width: 14.28%; 
+        border: 1px solid rgba(128, 128, 128, 0.2);
     }
-    td { 
+    .cal-table td { 
         text-align: center !important; 
-        height: 110px; 
+        height: 100px; 
         vertical-align: middle !important; 
-        font-size: 14px; 
-        border: 1px solid rgba(128, 128, 128, 0.1) !important;
+        border: 1px solid rgba(128, 128, 128, 0.1);
         width: 14.28%;
+        padding: 0;
     }
-    /* CALENDAR CELL CONTENT */
     .cal-cell {
         display: flex;
         flex-direction: column;
@@ -55,8 +57,6 @@ st.markdown("""
         border: 1px solid rgba(128, 128, 128, 0.2);
         margin-bottom: 25px;
     }
-    
-    /* TOOLTIP STYLING FOR DEEP DIVE */
     .metric-hover {
         cursor: help;
         border-bottom: 1px dotted rgba(128, 128, 128, 0.5);
@@ -132,7 +132,6 @@ def render_dashboard_view(df_subset, category_name):
     if df_closed.empty:
         st.info("No completed trades found.")
     else:
-        # Calculations
         df_closed['Days Held'] = (df_closed['Sell Date'] - df_closed['Buy Date']).dt.days
         df_closed['Is_Call'] = df_closed['Contract Description'].str.contains('Call', case=False, na=False)
         total_pnl = df_closed['Net Change'].sum()
@@ -147,7 +146,7 @@ def render_dashboard_view(df_subset, category_name):
 
         st.markdown("---")
 
-        # 1. TICKER PERFORMANCE (NET EXPECTANCY)
+        # 1. TICKER PERFORMANCE (NATIVE ST.DATAFRAME FOR AUTO ROW HEIGHT)
         st.markdown("### 📊 Ticker Edge Intelligence")
         ticker_stats = df_closed.groupby('Ticker').agg(
             Net_Profit=('Net Change', 'sum'),
@@ -164,15 +163,18 @@ def render_dashboard_view(df_subset, category_name):
         with col_t1:
             st.subheader("🏆 Top 5 by Expectancy")
             st.markdown("*Ranked by mathematical edge per trade.*")
-            st.table(ticker_stats.sort_values(by='Expectancy', ascending=False).head(5)[['Expectancy', 'Net_Profit']].style.format("${:,.2f}"))
+            top_5 = ticker_stats.sort_values(by='Expectancy', ascending=False).head(5)[['Expectancy', 'Net_Profit']]
+            st.dataframe(top_5.style.format("${:,.2f}"), use_container_width=True)
         with col_t2:
             st.subheader("📉 Bottom 5 by Expectancy")
             st.markdown("*Tickers where the math is working against you.*")
-            st.table(ticker_stats.sort_values(by='Expectancy', ascending=True).head(5)[['Expectancy', 'Net_Profit']].style.format("${:,.2f}"))
+            bot_5 = ticker_stats.sort_values(by='Expectancy', ascending=True).head(5)[['Expectancy', 'Net_Profit']]
+            bot_5 = bot_5.rename(columns={'Net_Profit': 'Net Loss'}) # RENAMED HERE
+            st.dataframe(bot_5.style.format("${:,.2f}"), use_container_width=True)
 
         st.markdown("---")
 
-        # 2. DEEP DIVE: PORTFOLIO INTELLIGENCE (WITH HOVER DEFS)
+        # 2. DEEP DIVE: PORTFOLIO INTELLIGENCE
         st.markdown("### 🔬 Portfolio Intelligence")
         
         daily_perf = df_closed.groupby(df_closed['Buy Date'].dt.date)['Net Change'].sum()
@@ -200,7 +202,7 @@ def render_dashboard_view(df_subset, category_name):
 
         st.markdown("---")
 
-        # 3. MONTHLY CALENDAR (FIXED SYMMETRY)
+        # 3. MONTHLY CALENDAR (CUSTOM HTML TO REMOVE INDEX COLUMN & FIX WIDTH)
         st.markdown("### 📅 Monthly P&L Journal")
         df_closed['Month_Str'] = df_closed['Buy Date'].dt.strftime('%B %Y')
         selected_month = st.selectbox("Select Month", df_closed['Month_Str'].unique(), key=f"cal_{category_name}")
@@ -210,20 +212,40 @@ def render_dashboard_view(df_subset, category_name):
         
         first_date = cal_subset['Buy Date'].iloc[0]
         matrix = calendar.monthcalendar(first_date.year, first_date.month)
-        cal_df = pd.DataFrame(matrix, columns=['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'])
         
-        def format_cell(day):
-            if day == 0: return ""
-            stats = daily_stats.get(day, {'PNL': 0, 'Count': 0})
-            pnl_str = f"${stats['PNL']:,.0f}" if stats['PNL'] != 0 else ""
-            trade_str = f"{stats['Count']} Trades" if stats['Count'] > 0 else ""
-            return f'<div class="cal-cell"><div class="cal-date">{day}</div><div class="cal-pnl">{pnl_str}</div><div class="cal-trades">{trade_str}</div></div>'
+        cal_html = '<table class="cal-table"><thead><tr>'
+        for day_name in ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']:
+            cal_html += f'<th>{day_name}</th>'
+        cal_html += '</tr></thead><tbody>'
+        
+        for week in matrix:
+            cal_html += '<tr>'
+            for day in week:
+                if day == 0:
+                    cal_html += '<td></td>'
+                else:
+                    stats = daily_stats.get(day, {'PNL': 0, 'Count': 0})
+                    pnl = stats['PNL']
+                    count = stats['Count']
+                    
+                    bg_color = ""
+                    if pnl > 0: bg_color = "background-color: rgba(40, 167, 69, 0.25);"
+                    elif pnl < 0: bg_color = "background-color: rgba(220, 53, 69, 0.25);"
+                    
+                    pnl_str = f"${pnl:,.0f}" if pnl != 0 else ""
+                    trade_str = f"{count} Trades" if count > 0 else ""
+                    
+                    cal_html += f'<td style="{bg_color}"><div class="cal-cell"><div class="cal-date">{day}</div><div class="cal-pnl">{pnl_str}</div><div class="cal-trades">{trade_str}</div></div></td>'
+            cal_html += '</tr>'
+        cal_html += '</tbody></table>'
+        
+        st.markdown(cal_html, unsafe_allow_html=True)
 
-        st.write(cal_df.map(format_cell).style.map(lambda val: f"background-color: {'rgba(40, 167, 69, 0.25)' if '$' in val and '-' not in val else ('rgba(220, 53, 69, 0.25)' if '$-' in val else '')};").to_html(escape=False), unsafe_allow_html=True)
-
-    # --- 4. TRADE LOG ---
+    # --- 4. TRADE LOG & DOWNLOAD BUTTON RE-ADDED ---
     st.markdown("---")
     st.subheader(f"📋 {category_name} Trade Log")
+    csv = df_subset.to_csv(index=False).encode('utf-8')
+    st.download_button("📥 Download Trade Log as CSV", data=csv, file_name=f"{category_name.lower()}_log.csv", mime="text/csv", key=f"dl_{category_name}")
     st.dataframe(df_subset, use_container_width=True)
 
 # --- STREAMLIT UI ---
@@ -246,9 +268,8 @@ if uploaded_file:
     if search_query:
         df_raw = df_raw[df_raw['Ticker'].str.contains(search_query, na=False)]
     
-    # EXACT OPTIONS FILTER FOR OPEN POSITIONS
     open_options_count = len(df_raw[(df_raw['Status'] == 'Open') & (df_raw['Asset Category'] == 'Option')])
-    st.sidebar.metric("Open Option Positions", open_options_count, help="Total number of distinct Option contracts currently open (excludes Covered Calls).")
+    st.sidebar.metric("Open Option Positions", open_options_count, help="Total number of distinct Option contracts currently open.")
     
     st.sidebar.markdown("---")
     st.sidebar.markdown("👨‍💻 **Puneeth Rao** | [🔗 LinkedIn](https://www.linkedin.com/in/puneeth-rao-9154b511/)")
