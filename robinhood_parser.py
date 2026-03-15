@@ -10,12 +10,30 @@ import calendar
 # Set calendar to start on Sunday
 calendar.setfirstweekday(calendar.SUNDAY)
 
-# --- CSS FOR SYMMETRY AND STYLE ---
+# --- CSS FOR DARK MODE COMPATIBILITY & SYMMETRY ---
 st.markdown("""
     <style>
-    .stTable { width: 100%; }
-    th { text-align: center !important; background-color: #f0f2f6; font-weight: bold; }
-    td { text-align: center !important; height: 60px; vertical-align: middle !important; font-size: 14px; }
+    .stTable { 
+        width: 100%; 
+        border-radius: 10px; 
+        overflow: hidden; 
+        border: 1px solid rgba(128, 128, 128, 0.2);
+    }
+    th { 
+        text-align: center !important; 
+        background-color: rgba(128, 128, 128, 0.1) !important; 
+        color: inherit !important;
+        font-weight: bold; 
+        padding: 10px !important;
+    }
+    td { 
+        text-align: center !important; 
+        height: 65px; 
+        vertical-align: middle !important; 
+        font-size: 14px; 
+        border-bottom: 1px solid rgba(128, 128, 128, 0.1) !important;
+    }
+    [data-testid="stMetricValue"] { font-size: 1.8rem !important; }
     </style>
     """, unsafe_allow_html=True)
 
@@ -136,9 +154,8 @@ def render_dashboard_view(df_subset, category_name):
 
         st.markdown("---")
 
-        # 2. ENHANCED MARKET INTELLIGENCE & RECOMMENDATIONS
+        # 2. MARKET INTELLIGENCE
         st.markdown("### 📡 Market Intelligence & Strategy")
-        
         top_t = ticker_stats['Net_Profit'].idxmax()
         worst_t = ticker_stats['Net_Profit'].idxmin()
         call_perf = df_closed[df_closed['Is_Call']]['Net Change'].sum()
@@ -147,18 +164,13 @@ def render_dashboard_view(df_subset, category_name):
         intel_col1, intel_col2 = st.columns(2)
         with intel_col1:
             st.success(f"🔥 **Strength Lead:** {top_t}")
-            st.write(f"News Insight: {fetch_dynamic_intel(top_t)}")
-            st.markdown("**Actionable Strategy:**")
-            if call_perf > put_perf:
-                st.write("👉 Your Call options are currently outperforming. Focus on bullish delta-neutral or premium harvesting strategies.")
-            else:
-                st.write("👉 Put performance is stronger. Consider capital preservation through defensive positioning.")
-        
+            st.write(f"News: {fetch_dynamic_intel(top_t)}")
+            bias = "Calls" if call_perf > put_perf else "Puts"
+            st.write(f"**Strategy:** Edge detected in **{bias}**.")
         with intel_col2:
             st.error(f"⚠️ **Efficiency Gap:** {worst_t}")
-            st.write(f"News Insight: {fetch_dynamic_intel(worst_t)}")
-            st.markdown("**Risk Adjustment:**")
-            st.write(f"👉 Efficiency issue in {worst_t}. Review your entry criteria to avoid low-probability setups.")
+            st.write(f"News: {fetch_dynamic_intel(worst_t)}")
+            st.write(f"**Risk:** Tighten exits on {worst_t} to preserve alpha.")
 
         st.markdown("---")
 
@@ -174,7 +186,7 @@ def render_dashboard_view(df_subset, category_name):
             st.write(f"🐂 **Calls Net:** ${call_perf:,.2f}")
             st.write(f"🐻 **Puts Net:** ${put_perf:,.2f}")
         with ana_col3:
-            st.markdown("**Timing & Efficiency**")
+            st.markdown("**Efficiency**")
             dow = df_closed.groupby('Buy DoW')['Net Change'].sum()
             st.write(f"✅ **Best Day:** {dow.idxmax() if not dow.empty else 'N/A'}")
             st.write(f"⏱️ **Avg Days Held:** {df_closed['Days Held'].mean():.1f} Days")
@@ -191,17 +203,19 @@ def render_dashboard_view(df_subset, category_name):
         matrix = calendar.monthcalendar(int(year), int(month_idx))
         cal_df = pd.DataFrame(matrix, columns=['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'])
         styled_cal = cal_df.map(lambda d: f"{d}\n${daily_pnl.get(d, 0):,.0f}" if d != 0 and daily_pnl.get(d, 0) != 0 else (str(d) if d != 0 else ""))
+        
         def color_pnl(val):
             if "$" not in str(val): return 'text-align: center;'
             amt = float(val.split('$')[1].replace(',', ''))
-            return f"background-color: {'#d4edda' if amt > 0 else '#f8d7da'}; font-weight: bold; text-align: center;"
+            color = 'rgba(40, 167, 69, 0.3)' if amt > 0 else 'rgba(220, 53, 69, 0.3)'
+            return f"background-color: {color}; font-weight: bold; text-align: center;"
         st.table(styled_cal.style.map(color_pnl))
 
-    # --- 5. TRADE LOG ---
+    # --- 5. TRADE LOG (BOTTOM) ---
     st.markdown("---")
     st.subheader(f"📋 {category_name} Trade Log")
     csv = df_subset.to_csv(index=False).encode('utf-8')
-    st.download_button("📥 Download This View as CSV", data=csv, file_name=f"{category_name.lower()}_log.csv", mime="text/csv", key=f"dl_{category_name}")
+    st.download_button("📥 Download View as CSV", data=csv, file_name=f"{category_name.lower()}_log.csv", mime="text/csv", key=f"dl_{category_name}")
     
     display_df = df_subset.copy()
     display_df['Buy Date'] = display_df['Buy Date'].dt.strftime('%m/%d/%Y')
@@ -212,10 +226,21 @@ def render_dashboard_view(df_subset, category_name):
 st.set_page_config(page_title="Robinhood Dashboard", layout="wide", page_icon="📈")
 st.title("📈 Interactive Robinhood Options Dashboard")
 
-# --- SIDEBAR: TOP ---
+# --- SIDEBAR ---
 st.sidebar.subheader("🎯 Trade Edge Intelligence")
 st.sidebar.info("""
-    **Transforming raw data into actionable trade alpha.** This dashboard analyzes your behavioral edge and directional bias to refine your path toward consistent income.
+    Analyze behavioral edge and directional bias to refine your income path.
+""")
+st.sidebar.markdown("---")
+
+# NEW: HOW TO DOWNLOAD SECTION
+st.sidebar.subheader("📥 How to get your data")
+st.sidebar.markdown("""
+1. Go to [**Robinhood Reports**](https://robinhood.com/account/reports).
+2. Look for **Account History**.
+3. Select **Export as CSV**.
+4. Choose the date range you want to analyze.
+5. Upload the file below!
 """)
 st.sidebar.markdown("---")
 
@@ -234,22 +259,16 @@ if uploaded_file:
     
     st.sidebar.metric("Open Positions", len(df_raw[df_raw['Status'] == 'Open']))
     
-    # --- SIDEBAR: TRADE CONFIDENCE ---
     st.sidebar.markdown("### ⚡ Trade Confidence")
     df_c = df_raw[df_raw['Status'] == 'Closed'].copy()
     if not df_c.empty:
         df_c['Days Held'] = (df_c['Sell Date'] - df_c['Buy Date']).dt.days
         day_t = df_c[df_c['Days Held'] == 0]
         swing_t = df_c[df_c['Days Held'] > 0]
-        
-        day_wr = (len(day_t[day_t['Net Change'] > 0]) / len(day_t) * 100) if not day_t.empty else 0
-        swing_wr = (len(swing_t[swing_t['Net Change'] > 0]) / len(swing_t) * 100) if not swing_t.empty else 0
-        
-        st.sidebar.write(f"**Day Trade Win Rate:** {day_wr:.1f}%")
-        st.sidebar.write(f"**Swing Trade Win Rate:** {swing_wr:.1f}%")
+        st.sidebar.write(f"**Day Trade Win Rate:** {(len(day_t[day_t['Net Change'] > 0]) / len(day_t) * 100) if not day_t.empty else 0:.1f}%")
+        st.sidebar.write(f"**Swing Trade Win Rate:** {(len(swing_t[swing_t['Net Change'] > 0]) / len(swing_t) * 100) if not swing_t.empty else 0:.1f}%")
 
 st.sidebar.markdown("---")
-# --- SIDEBAR: BOTTOM SIGNATURE ---
 st.sidebar.markdown("👨‍💻 **Puneeth Rao**")
 st.sidebar.markdown("[🔗 LinkedIn Profile](https://www.linkedin.com/in/puneeth-rao-9154b511/)")
 
