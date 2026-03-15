@@ -34,6 +34,13 @@ st.markdown("""
         border-bottom: 1px solid rgba(128, 128, 128, 0.1) !important;
     }
     [data-testid="stMetricValue"] { font-size: 1.8rem !important; }
+    .instruction-box {
+        background-color: rgba(128, 128, 128, 0.05);
+        padding: 20px;
+        border-radius: 15px;
+        border: 1px solid rgba(128, 128, 128, 0.2);
+        margin-bottom: 25px;
+    }
     </style>
     """, unsafe_allow_html=True)
 
@@ -170,7 +177,7 @@ def render_dashboard_view(df_subset, category_name):
         with intel_col2:
             st.error(f"⚠️ **Efficiency Gap:** {worst_t}")
             st.write(f"News: {fetch_dynamic_intel(worst_t)}")
-            st.write(f"**Risk:** Tighten exits on {worst_t} to preserve alpha.")
+            st.write(f"**Risk:** Review strikes on {worst_t} to preserve alpha.")
 
         st.markdown("---")
 
@@ -226,22 +233,25 @@ def render_dashboard_view(df_subset, category_name):
 st.set_page_config(page_title="Robinhood Dashboard", layout="wide", page_icon="📈")
 st.title("📈 Interactive Robinhood Options Dashboard")
 
+# --- TOP SECTION: DATA DOWNLOAD INSTRUCTIONS ---
+with st.container():
+    st.markdown("""
+    <div class="instruction-box">
+        <h3>📥 How to get your Robinhood CSV Data</h3>
+        <p>Follow these steps to export your history for analysis:</p>
+        <ol>
+            <li>Go to the direct <b><a href="https://robinhood.com/account/reports" target="_blank">Robinhood Reports Portal</a></b> on your desktop.</li>
+            <li>Look for the <b>Account History</b> or <b>Custom Account Activity</b> section.</li>
+            <li>Select <b>Export as CSV</b> (make sure it's the <u>Activity Report</u>, not just a PDF statement).</li>
+            <li>Choose your desired date range and click <b>Generate Report</b>.</li>
+            <li>Once ready, download the file and upload it below.</li>
+        </ol>
+    </div>
+    """, unsafe_allow_html=True)
+
 # --- SIDEBAR ---
 st.sidebar.subheader("🎯 Trade Edge Intelligence")
-st.sidebar.info("""
-    Analyze behavioral edge and directional bias to refine your income path.
-""")
-st.sidebar.markdown("---")
-
-# NEW: HOW TO DOWNLOAD SECTION
-st.sidebar.subheader("📥 How to get your data")
-st.sidebar.markdown("""
-1. Go to [**Robinhood Reports**](https://robinhood.com/account/reports).
-2. Look for **Account History**.
-3. Select **Export as CSV**.
-4. Choose the date range you want to analyze.
-5. Upload the file below!
-""")
+st.sidebar.info("Analyze behavioral edge and directional bias to refine your income path.")
 st.sidebar.markdown("---")
 
 search_query = st.sidebar.text_input("🔍 Search Ticker or Contract", "").strip().upper()
